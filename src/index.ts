@@ -1,0 +1,65 @@
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import mongoose from "mongoose";
+
+import env from "@/config/env";
+import { connectDB } from "@/config/db";
+import { gracefullyShutdown } from "@/config/server";
+// import { type tHttpError } from "@/api/v1/interfaces/http";
+import { responseMessage } from "@/constant";
+import { httpError } from "@/api/v1/utils/httpError";
+import { globalErrorHandler } from "@/api/v1/middlewares/globarErrorHandler";
+import httpResponse from "./api/v1/utils/httpResponse";
+
+const app = express();
+
+app.use(
+  cors({
+    origin: env.CLIENT_URL,
+    credentials: true,
+  }),
+);
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// --- Routes ---
+app.get("/", (req, res) => {
+  return httpResponse(req,res,200,"Server is running")
+});
+
+//404 handller
+app.use((req: Request, _: Response, next: NextFunction) => {
+  try {
+    throw new Error(responseMessage.NOT_FOUND("Route"));
+  } catch (error) {
+    httpError(next, error, req, 404);
+  }
+});
+
+//global error handler
+app.use(globalErrorHandler);
+
+const startServer = async () => {
+  await connectDB();
+
+  const server = app.listen(env.PORT, () => {
+    console.log(`[✔] Server running on port ${env.PORT} in ${env.ENV} mode`);
+  });
+
+  process.on("SIGINT", () => gracefullyShutdown(server, mongoose));
+  process.on("SIGTERM", () => gracefullyShutdown(server, mongoose));
+
+  process.on("uncaughtException", (error) => {
+    console.error("[✖] Uncaught Exception:", error);
+    gracefullyShutdown(server, mongoose);
+  });
+};
+
+startServer();

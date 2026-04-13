@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES6",
+    "module": "ESNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "esModuleInterop": true,
+    "strict": false,
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "noUncheckedIndexedAccess": true,
+    // "exactOptionalPropertyTypes": true,
+    "allowSyntheticDefaultImports": true,
+    "noEmit": false,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+     "noImplicitAny": false,
+     "paths": {
+      "@/*": ["./src/*"]
+    }
+
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist"]
+}
