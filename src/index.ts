@@ -13,7 +13,7 @@ import { gracefullyShutdown } from "@/config/server";
 // import { type tHttpError } from "@/api/v1/interfaces/http";
 import { responseMessage } from "@/constant";
 import { httpError } from "@/api/v1/utils/httpError";
-import { globalErrorHandler } from "@/api/v1/middlewares/globarErrorHandler";
+import { globalErrorHandler } from "@/api/v1/middlewares/globarErrorHandler.middleware";
 import httpResponse from "@/api/v1/utils/httpResponse";
 
 import userRoutes from "@/api/v1/routes/user.route";

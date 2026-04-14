@@ -26,7 +26,6 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
 
     await session.commitTransaction();
     
-    // Remove password from response
     const userResponse = newUser.toObject();
     delete userResponse.password;
 
@@ -164,7 +163,6 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
     const isMatch = await user.comparePassword(password);
     if (!isMatch) throw new Error("Invalid credentials");
 
-    // Replace "YOUR_SECRET_KEY" with your actual env secret
     const token = jwt.sign({ id: user._id, role: user.role }, env.TOKEN_SECRET, {
       expiresIn: "1d",
     });
@@ -172,7 +170,7 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
     const userResponse = user.toObject();
     delete userResponse.password;
 
-    return httpResponse(req, res, 200, "Login successful", { user: userResponse, token });
+    return httpResponse(req, res, 200, "Login successful", { user: userResponse});
   } catch (error) {
     return httpError(next, error, req, 401);
   }
@@ -183,8 +181,7 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
 // ==========================================
 export const logout = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    // If you are using cookies: res.clearCookie('token');
-    // If using Bearer tokens, logout is mostly handled client-side by destroying the token
+    res.clearCookie('token');
     return httpResponse(req, res, 200, "Logged out successfully");
   } catch (error) {
     return httpError(next, error, req, 500);

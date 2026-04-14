@@ -10,8 +10,8 @@ import {
   logout, 
   me 
 } from "@/api/v1/controllers/user.controller";
-import { validateRequest } from "@/api/v1/middlewares/validateRequest";
-// import { protect } from "../middlewares/auth.middleware";
+import { validateRequest } from "@/api/v1/middlewares/validateRequest.middleware";
+import { protect } from "@/api/v1/middlewares/auth.middleware";
 import { 
   createUserSchema, 
   updateUserSchema, 
@@ -28,7 +28,7 @@ router.post("/login", validateRequest(loginSchema), login);
 router.post("/logout", logout);
 
 // Protected Routes (Assuming `protect` middleware ensures `req.user` exists)
-// router.use(protect); 
+router.use(protect); 
 
 router.get("/me", me);
 router.post("/change-password", validateRequest(changePasswordSchema), changePassword);
