@@ -14,7 +14,9 @@ import { gracefullyShutdown } from "@/config/server";
 import { responseMessage } from "@/constant";
 import { httpError } from "@/api/v1/utils/httpError";
 import { globalErrorHandler } from "@/api/v1/middlewares/globarErrorHandler";
-import httpResponse from "./api/v1/utils/httpResponse";
+import httpResponse from "@/api/v1/utils/httpResponse";
+
+import userRoutes from "@/api/v1/routes/user.route";
 
 const app = express();
 
@@ -33,6 +35,8 @@ app.use(cookieParser());
 app.get("/", (req, res) => {
   return httpResponse(req,res,200,"Server is running")
 });
+
+app.use("/api/v1/users", userRoutes);
 
 //404 handller
 app.use((req: Request, _: Response, next: NextFunction) => {
