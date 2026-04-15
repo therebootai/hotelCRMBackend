@@ -3,14 +3,18 @@ import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 import { User } from "@/api/v1/models/user.model";
 import { httpError } from "@/api/v1/utils/httpError";
-import httpResponse from "@/api/v1/utils/httpResponse"; 
-import { AuthRequest } from "@/api/v1/interfaces/auth"; 
+import httpResponse from "@/api/v1/utils/httpResponse";
+import { AuthRequest } from "@/api/v1/interfaces/auth";
 import env from "@/config/env";
 
 // ==========================================
 // CREATE USER
 // ==========================================
-export const createUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const createUser = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
@@ -25,11 +29,17 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
     await newUser.save({ session });
 
     await session.commitTransaction();
-    
+
     const userResponse = newUser.toObject();
     delete userResponse.password;
 
-    return httpResponse(req, res, 201, "User created successfully", userResponse);
+    return httpResponse(
+      req,
+      res,
+      201,
+      "User created successfully",
+      userResponse,
+    );
   } catch (error) {
     await session.abortTransaction();
     return httpError(next, error, req, 400);
@@ -41,11 +51,15 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
 // ==========================================
 // GET USER BY ID
 // ==========================================
-export const getUserById = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const getUserById = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { id } = req.params;
     const user = await User.findById(id);
-    
+
     if (!user) throw new Error("User not found");
 
     return httpResponse(req, res, 200, "User fetched successfully", user);
@@ -57,7 +71,11 @@ export const getUserById = async (req: AuthRequest, res: Response, next: NextFun
 // ==========================================
 // GET ALL USERS
 // ==========================================
-export const getUsers = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const getUsers = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const users = await User.find({});
     return httpResponse(req, res, 200, "Users fetched successfully", users);
@@ -69,24 +87,36 @@ export const getUsers = async (req: AuthRequest, res: Response, next: NextFuncti
 // ==========================================
 // UPDATE USER
 // ==========================================
-export const updateUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const updateUser = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
     const { id } = req.params;
     const updateData = req.body;
-    
+
     // Prevent updating password via this route
     if (updateData.password) delete updateData.password;
 
-    const updatedUser = await User.findByIdAndUpdate(id, updateData, { 
-      new: true, runValidators: true, session 
+    const updatedUser = await User.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+      session,
     });
 
     if (!updatedUser) throw new Error("User not found");
 
     await session.commitTransaction();
-    return httpResponse(req, res, 200, "User updated successfully", updatedUser);
+    return httpResponse(
+      req,
+      res,
+      200,
+      "User updated successfully",
+      updatedUser,
+    );
   } catch (error) {
     await session.abortTransaction();
     return httpError(next, error, req, 400);
@@ -98,20 +128,26 @@ export const updateUser = async (req: AuthRequest, res: Response, next: NextFunc
 // ==========================================
 // TOGGLE STATUS
 // ==========================================
-export const toggleStatus = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const toggleStatus = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
     const { id } = req.params;
     const user = await User.findById(id).session(session);
-    
+
     if (!user) throw new Error("User not found");
 
     user.isActive = !user.isActive;
     await user.save({ session });
 
     await session.commitTransaction();
-    return httpResponse(req, res, 200, "User status toggled successfully", { isActive: user.isActive });
+    return httpResponse(req, res, 200, "User status toggled successfully", {
+      isActive: user.isActive,
+    });
   } catch (error) {
     await session.abortTransaction();
     return httpError(next, error, req, 400);
@@ -123,14 +159,20 @@ export const toggleStatus = async (req: AuthRequest, res: Response, next: NextFu
 // ==========================================
 // CHANGE PASSWORD
 // ==========================================
-export const changePassword = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const changePassword = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
     const { oldPassword, newPassword } = req.body;
     const userId = req.user?._id; // Extracted from protect middleware
 
-    const user = await User.findById(userId).select("+password").session(session);
+    const user = await User.findById(userId)
+      .select("+password")
+      .session(session);
     if (!user) throw new Error("User not found");
 
     const isMatch = await user.comparePassword(oldPassword);
@@ -152,7 +194,11 @@ export const changePassword = async (req: AuthRequest, res: Response, next: Next
 // ==========================================
 // LOGIN
 // ==========================================
-export const login = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const login = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const { loginId, password } = req.body;
 
@@ -163,13 +209,26 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
     const isMatch = await user.comparePassword(password);
     if (!isMatch) throw new Error("Invalid credentials");
 
-    const token = jwt.sign({ id: user._id, role: user.role }, env.TOKEN_SECRET, {
-      expiresIn: "1d",
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      env.TOKEN_SECRET,
+      {
+        expiresIn: "1d",
+      },
+    );
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
     const userResponse = user.toObject();
     delete userResponse.password;
-    return httpResponse(req, res, 200, "Login successful", { user: userResponse});
+    return httpResponse(req, res, 200, "Login successful", {
+      user: userResponse,
+    });
   } catch (error) {
     return httpError(next, error, req, 401);
   }
@@ -178,9 +237,13 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
 // ==========================================
 // LOGOUT
 // ==========================================
-export const logout = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const logout = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
-    res.clearCookie('token');
+    res.clearCookie("token");
     return httpResponse(req, res, 200, "Logged out successfully");
   } catch (error) {
     return httpError(next, error, req, 500);
@@ -190,11 +253,21 @@ export const logout = async (req: AuthRequest, res: Response, next: NextFunction
 // ==========================================
 // ME (Get current user profile)
 // ==========================================
-export const me = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const me = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     if (!req.user) throw new Error("Not authenticated");
 
-    return httpResponse(req, res, 200, "Profile fetched successfully", req.user);
+    return httpResponse(
+      req,
+      res,
+      200,
+      "Profile fetched successfully",
+      req.user,
+    );
   } catch (error) {
     return httpError(next, error, req, 401);
   }
