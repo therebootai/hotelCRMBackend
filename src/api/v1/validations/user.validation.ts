@@ -17,7 +17,7 @@ export const createUserSchema = z.object({
       message: "Role is required and must be either 'admin' or 'receptionist'",
     }),
     
-    login_id: z
+    loginId: z
       .string({ message: "Login ID is required" })
       .min(4, "Login ID must be at least 4 characters"),
     
@@ -67,7 +67,7 @@ export const getUSerByIdSchema = z.object({
 // ==========================================
 export const loginSchema = z.object({
   body: z.object({
-    login_id: z.string({ message: "Login ID is required" }),
+    loginId: z.string({ message: "Login ID is required" }),
     password: z.string({ message: "Password is required" }),
   }),
 });

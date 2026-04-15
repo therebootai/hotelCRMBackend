@@ -5,7 +5,7 @@ export interface IUser extends Document {
   fullName: string;
   mobile: string;
   role: "admin" | "receptionist";
-  login_id: string;
+  loginId: string;
   password?: string;
   isActive: boolean;
   comparePassword: (candidatePassword: string) => Promise<boolean>;
@@ -16,7 +16,7 @@ const UserSchema = new Schema<IUser>(
     fullName: { type: String, required: true },
     mobile: { type: String, required: true },
     role: { type: String, enum: ["admin", "receptionist"], required: true },
-    login_id: { type: String, required: true, unique: true },
+    loginId: { type: String, required: true, unique: true },
     password: {
       type: String,
       required: true,

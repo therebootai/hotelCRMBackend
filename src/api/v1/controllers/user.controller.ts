@@ -14,14 +14,14 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { fullName, mobile, role, login_id, password } = req.body;
+    const { fullName, mobile, role, loginId, password } = req.body;
 
-    const existingUser = await User.findOne({ login_id }).session(session);
+    const existingUser = await User.findOne({ loginId }).session(session);
     if (existingUser) {
-      throw new Error("User with this login_id already exists");
+      throw new Error("User with this loginId already exists");
     }
 
-    const newUser = new User({ fullName, mobile, role, login_id, password });
+    const newUser = new User({ fullName, mobile, role, loginId, password });
     await newUser.save({ session });
 
     await session.commitTransaction();
@@ -154,9 +154,9 @@ export const changePassword = async (req: AuthRequest, res: Response, next: Next
 // ==========================================
 export const login = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { login_id, password } = req.body;
+    const { loginId, password } = req.body;
 
-    const user = await User.findOne({ login_id }).select("+password");
+    const user = await User.findOne({ loginId }).select("+password");
     if (!user) throw new Error("Invalid credentials");
     if (!user.isActive) throw new Error("Account is disabled. Contact Admin.");
 
@@ -169,7 +169,6 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
 
     const userResponse = user.toObject();
     delete userResponse.password;
-
     return httpResponse(req, res, 200, "Login successful", { user: userResponse});
   } catch (error) {
     return httpError(next, error, req, 401);
@@ -193,7 +192,6 @@ export const logout = async (req: AuthRequest, res: Response, next: NextFunction
 // ==========================================
 export const me = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    // req.user is populated by your authentication/protect middleware
     if (!req.user) throw new Error("Not authenticated");
 
     return httpResponse(req, res, 200, "Profile fetched successfully", req.user);
