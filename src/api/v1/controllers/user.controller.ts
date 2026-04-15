@@ -8,6 +8,34 @@ import { AuthRequest } from "@/api/v1/interfaces/auth";
 import env from "@/config/env";
 
 // ==========================================
+// HELPER: AUTHORIZE USER ACTIONS
+// ==========================================
+const authorizeAndGetTargetUser = async (
+  currentUser: any, 
+  targetId: string, 
+  session: mongoose.ClientSession,
+  actionName: string
+) => {
+  if (!currentUser) throw new Error("Not authenticated");
+
+  
+  if (currentUser._id.toString() === targetId) {
+    throw new Error(`You cannot ${actionName} your own account`);
+  }
+
+  const targetUser = await User.findById(targetId).session(session);
+  if (!targetUser) throw new Error("User not found");
+
+  if (currentUser.role !== "admin" && targetUser.role === "admin") {
+    const err = new Error(`Unauthorized: Non-admins cannot ${actionName} admin accounts`);
+    err.name = "ForbiddenError";
+    throw err;
+  }
+
+  return targetUser;
+};
+
+// ==========================================
 // CREATE USER
 // ==========================================
 export const createUser = async (
@@ -137,20 +165,21 @@ export const toggleStatus = async (
   session.startTransaction();
   try {
     const { id } = req.params;
-    const user = await User.findById(id).session(session);
+    const singleId: string = Array.isArray(id) ? id[0] : id;
 
-    if (!user) throw new Error("User not found");
+    const targetUser = await authorizeAndGetTargetUser(req.user, singleId, session, "change the active status of");
 
-    user.isActive = !user.isActive;
-    await user.save({ session });
+    targetUser.isActive = !targetUser.isActive;
+    await targetUser.save({ session });
 
     await session.commitTransaction();
     return httpResponse(req, res, 200, "User status toggled successfully", {
-      isActive: user.isActive,
+      isActive: targetUser.isActive,
     });
   } catch (error) {
     await session.abortTransaction();
-    return httpError(next, error, req, 400);
+    const statusCode = error instanceof Error && error.name === "ForbiddenError" ? 403 : 400;
+    return httpError(next, error, req, statusCode);
   } finally {
     session.endSession();
   }
@@ -270,5 +299,37 @@ export const me = async (
     );
   } catch (error) {
     return httpError(next, error, req, 401);
+  }
+};
+
+
+// ==========================================
+// DELETE USER
+// ==========================================
+export const deleteUser = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const { id } = req.params;
+
+    const singleId: string = Array.isArray(id) ? id[0] : id;
+    
+    await authorizeAndGetTargetUser(req.user, singleId, session, "delete");
+
+    // 2. If it passes, execute the deletion
+    await User.findByIdAndDelete(id).session(session);
+
+    await session.commitTransaction();
+    return httpResponse(req, res, 200, "User deleted successfully");
+  } catch (error) {
+    await session.abortTransaction();
+    const statusCode = error instanceof Error && error.name === "ForbiddenError" ? 403 : 400;
+    return httpError(next, error, req, statusCode);
+  } finally {
+    session.endSession();
   }
 };

@@ -83,3 +83,13 @@ export const changePasswordSchema = z.object({
       .min(6, "New password must be at least 6 characters"),
   }),
 });
+
+
+// ==========================================
+// DELETE USER SCHEMA
+// ==========================================
+export const deleteUserSchema = z.object({
+  params: z.object({
+    id: z.string({ message: "User ID is required in URL" }),
+  }),
+});

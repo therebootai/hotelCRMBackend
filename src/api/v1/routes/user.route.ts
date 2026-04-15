@@ -8,7 +8,8 @@ import {
   changePassword, 
   login,
   logout, 
-  me 
+  me, 
+  deleteUser
 } from "@/api/v1/controllers/user.controller";
 import { validateRequest } from "@/api/v1/middlewares/validateRequest.middleware";
 import { protect } from "@/api/v1/middlewares/auth.middleware";
@@ -18,7 +19,8 @@ import {
   loginSchema, 
   changePasswordSchema, 
   toggleUserStatusSchema,
-  getUSerByIdSchema
+  getUSerByIdSchema,
+  deleteUserSchema
 } from "@/api/v1/validations/user.validation";
 
 const router = Router();
@@ -38,6 +40,7 @@ router.post("/", validateRequest(createUserSchema), createUser);
 router.get("/", getUsers);
 router.get("/:id",validateRequest(getUSerByIdSchema), getUserById);
 router.put("/:id", validateRequest(updateUserSchema), updateUser);
+router.delete("/:id", validateRequest(deleteUserSchema), deleteUser);
 router.patch("/:id/toggle-status",validateRequest(toggleUserStatusSchema), toggleStatus);
 
 export default router;
