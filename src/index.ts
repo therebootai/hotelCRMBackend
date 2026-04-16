@@ -6,6 +6,8 @@ import express, {
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
+import fileUpload from "express-fileupload";
+
 
 import env from "@/config/env";
 import { connectDB } from "@/config/db";
@@ -25,6 +27,13 @@ app.use(
     origin: env.CLIENT_URL,
     credentials: true,
   }),
+);
+
+app.use(
+  fileUpload({
+    useTempFiles: true,
+    tempFileDir: "/tmp/",
+  })
 );
 
 app.use(express.json());
