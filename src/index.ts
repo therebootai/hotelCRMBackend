@@ -21,6 +21,7 @@ import userRoutes from "@/api/v1/routes/user.route";
 import roomTypeRoutes from "@/api/v1/routes/roomType.route";
 import taxGstRoutes from "@/api/v1/routes/taxGst.route";
 import amenityRoutes from "@/api/v1/routes/amenity.route";
+import roomRoutes from "@/api/v1/routes/room.route";
 
 const app = express();
 
@@ -51,6 +52,7 @@ app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/room-types", roomTypeRoutes);
 app.use("/api/v1/tax-gst", taxGstRoutes);
 app.use("/api/v1/amenity", amenityRoutes);
+app.use("/api/v1/room",roomRoutes)
 
 //404 handller
 app.use((req: Request, _: Response, next: NextFunction) => {

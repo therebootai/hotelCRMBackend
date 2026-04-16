@@ -26,8 +26,8 @@ const RoomSchema = new Schema<IRoom>(
     building: { type: String },
     floor: { type: String },
     
-    maxAdults: { type: Number, required: true, default: 2 },
-    maxChildren: { type: Number, required: true, default: 1 },
+    maxAdults: { type: Number, required: true},
+    maxChildren: { type: Number, required: true},
     extraBedAllowed: { type: Boolean, default: false },
     extraBedCharge: { type: Number, default: 0 },
     
