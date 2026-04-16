@@ -19,6 +19,7 @@ import { globalErrorHandler } from "@/api/v1/middlewares/globarErrorHandler.midd
 import httpResponse from "@/api/v1/utils/httpResponse";
 
 import userRoutes from "@/api/v1/routes/user.route";
+import roomTypeRoutes from "@/api/v1/routes/roomType.route"
 
 const app = express();
 
@@ -46,6 +47,7 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api/v1/users", userRoutes);
+app.use("/api/v1/room-types", roomTypeRoutes);
 
 //404 handller
 app.use((req: Request, _: Response, next: NextFunction) => {
