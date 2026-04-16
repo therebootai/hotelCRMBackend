@@ -8,7 +8,6 @@ import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
 import fileUpload from "express-fileupload";
 
-
 import env from "@/config/env";
 import { connectDB } from "@/config/db";
 import { gracefullyShutdown } from "@/config/server";
@@ -19,8 +18,9 @@ import { globalErrorHandler } from "@/api/v1/middlewares/globarErrorHandler.midd
 import httpResponse from "@/api/v1/utils/httpResponse";
 
 import userRoutes from "@/api/v1/routes/user.route";
-import roomTypeRoutes from "@/api/v1/routes/roomType.route"
+import roomTypeRoutes from "@/api/v1/routes/roomType.route";
 import taxGstRoutes from "@/api/v1/routes/taxGst.route";
+import amenityRoutes from "@/api/v1/routes/amenity.route";
 
 const app = express();
 
@@ -35,7 +35,7 @@ app.use(
   fileUpload({
     useTempFiles: true,
     tempFileDir: "/tmp/",
-  })
+  }),
 );
 
 app.use(express.json());
@@ -44,12 +44,13 @@ app.use(cookieParser());
 
 // --- Routes ---
 app.get("/", (req, res) => {
-  return httpResponse(req,res,200,"Server is running")
+  return httpResponse(req, res, 200, "Server is running");
 });
 
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/room-types", roomTypeRoutes);
-app.use("/api/v1",taxGstRoutes)
+app.use("/api/v1/tax-gst", taxGstRoutes);
+app.use("/api/v1/amenity", amenityRoutes);
 
 //404 handller
 app.use((req: Request, _: Response, next: NextFunction) => {
