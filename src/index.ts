@@ -53,7 +53,7 @@ app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/room-types", roomTypeRoutes);
 app.use("/api/v1/tax-gst", taxGstRoutes);
 app.use("/api/v1/amenity", amenityRoutes);
-app.use("/api/v1/room", roomRoutes);
+app.use("/api/v1/rooms", roomRoutes);
 app.use("/api/v1/pricing-rules", pricingRuleRoutes);
 
 //404 handller
