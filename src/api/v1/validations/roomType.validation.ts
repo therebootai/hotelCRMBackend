@@ -32,11 +32,6 @@ export const updateRoomTypeSchema = z.object({
     description: z
       .string()
       .optional(),
-      
-    imagesToRemove: z
-      .union([z.string(), z.array(z.string())])
-      .optional()
-      .transform((val) => (typeof val === "string" ? [val] : val)), 
   }),
 });
 
