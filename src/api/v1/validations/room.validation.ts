@@ -51,6 +51,7 @@ export const updateRoomSchema = z.object({
     viewType: z.string().optional(),
     amenities: z.array(z.string()).optional(),
     description: z.string().optional(),
+    status: z.enum(["Active", "Maintenance", "Blocked"]).optional(),
   }).strict(),
 });
 
