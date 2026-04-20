@@ -11,7 +11,7 @@ export interface IFacility extends Document {
 
   basePrice: number;
 
-  amenities?: string[];
+  amenities?: mongoose.Types.ObjectId[];
   description?: string;
 
   status: "Active" | "Maintenance" | "Blocked";
@@ -45,7 +45,7 @@ const FacilitySchema = new Schema<IFacility>(
 
     basePrice: { type: Number, required: true },
 
-    amenities: [{ type: String }],
+    amenities: [{ type: Schema.Types.ObjectId, ref: "Amenity" }],
 
     description: { type: String },
 
