@@ -26,6 +26,7 @@ import pricingRuleRoutes from "@/api/v1/routes/pricingRule.route";
 import bookingRoutes from "@/api/v1/routes/booking.route";
 import checkinRoutes from "@/api/v1/routes/checkin.route";
 import facilityRoutes from "@/api/v1/routes/facility.route";
+import extraServiceRoute from "@/api/v1/routes/extraService.route"
 
 
 
@@ -63,6 +64,7 @@ app.use("/api/v1/pricing-rules", pricingRuleRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/checkin", checkinRoutes);
 app.use("/api/v1/facilities",facilityRoutes)
+app.use("/api/v1/extra-services",extraServiceRoute)
 
 
 //404 handller
