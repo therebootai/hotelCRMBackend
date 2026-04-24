@@ -1,9 +1,12 @@
-import { Response, NextFunction } from "express";
+import { Response, NextFunction, Request } from "express";
 import mongoose from "mongoose";
 import { Room } from "@/api/v1/models/room.model";
 import { httpError } from "@/api/v1/utils/httpError";
 import httpResponse from "@/api/v1/utils/httpResponse";
 import { AuthRequest } from "@/api/v1/interfaces/auth";
+import { Booking } from "../models/booking.model";
+import { CheckIn } from "../models/checkin.model";
+import { FacilityBooking } from "../models/facilityBooking.model";
 
 // ==========================================
 // CREATE ROOM
@@ -209,5 +212,114 @@ export const deleteRoom = async (
     return httpError(next, error, req, 400);
   } finally {
     session.endSession();
+  }
+};
+
+interface AvailabilityQuery {
+  roomType: string;
+  checkIn: string;
+  checkOut: string;
+}
+export const getAvailableRooms = async (
+  req: Request<{}, {}, {}, AvailabilityQuery>,
+  res: Response
+) => {
+  try {
+    const { roomType, checkIn, checkOut } = req.query;
+
+    if (!roomType || !checkIn || !checkOut) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required parameters",
+      });
+    }
+
+    const startDate = new Date(checkIn as string);
+    const endDate = new Date(checkOut as string);
+
+    const busyBookings = await Booking.find({
+      status: {
+        $in: ["Pending", "Confirmed", "Checked-In", "Partially Checked-In"],
+      },
+      rooms: {
+        $elemMatch: {
+          checkInDate: { $lt: endDate },
+          checkOutDate: { $gt: startDate },
+        },
+      },
+    }).select("rooms");
+
+    const busyCheckIns = await CheckIn.find({
+      status: "Active",
+      checkInTime: { $lt: endDate },
+      expectedCheckOutTime: { $gt: startDate },
+    }).select("roomDetails");
+
+    const busyFacilityBookings = await FacilityBooking.find({
+      status: { $in: ["Reserved", "Confirmed"] },
+      bookedRooms: {
+        $elemMatch: {
+          checkInDate: { $lt: endDate },
+          checkOutDate: { $gt: startDate },
+          status: { $ne: "Cancelled" },
+        },
+      },
+    }).select("bookedRooms");
+
+    const busyRoomIds = new Set<string>();
+
+    busyBookings.forEach((booking: any) => {
+      booking.rooms.forEach((room: any) => {
+        if (
+          room.roomId &&
+          new Date(room.checkInDate) < endDate &&
+          new Date(room.checkOutDate) > startDate
+        ) {
+          busyRoomIds.add(room.roomId.toString());
+        }
+      });
+    });
+
+    busyCheckIns.forEach((checkin: any) => {
+      checkin.roomDetails?.forEach((room: any) => {
+        if (room.roomId) {
+          busyRoomIds.add(room.roomId.toString());
+        }
+      });
+    });
+
+    busyFacilityBookings.forEach((facility: any) => {
+      facility.bookedRooms?.forEach((room: any) => {
+        if (
+          room.roomId &&
+          room.status !== "Cancelled" &&
+          (!room.checkInDate || new Date(room.checkInDate) < endDate) &&
+          (!room.checkOutDate || new Date(room.checkOutDate) > startDate)
+        ) {
+          busyRoomIds.add(room.roomId.toString());
+        }
+      });
+    });
+
+    const availableRooms = await Room.find({
+      status: "Active",
+      roomType,
+      _id: { $nin: Array.from(busyRoomIds) },
+    }).populate("roomType", "name");
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        rooms: availableRooms,
+        totalFound: availableRooms.length,
+      },
+    });
+  } catch (error: any) {
+    console.error("getAvailableRooms Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
