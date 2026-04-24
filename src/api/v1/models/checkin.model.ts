@@ -2,15 +2,31 @@ import mongoose, { Schema, Document } from "mongoose";
 
 export interface IGuestDetail {
   name: string;
+  mobileNo?: string;
   idType?: string;
   idNumber?: string;
   idDocument: {
-    public_id: string; 
-    secure_url: string; 
+    public_id: string;
+    secure_url: string;
   };
   isPrimary: boolean;
 }
 
+export interface IRoomStayDetail {
+  roomId: mongoose.Types.ObjectId;
+  roomType: mongoose.Types.ObjectId;
+  roomNumber: string;
+  appliedPrice: number;
+  originalPrice: number;
+}
+
+export interface IAdvancePayment {
+  amount: number;
+  paymentMode: "Cash" | "Online" | "Card";
+  transactionId?: string;
+  paidAt: Date;
+  note?: string;
+}
 
 export interface ICorporateCheckInDetails {
   companyName?: string;
@@ -46,32 +62,34 @@ export interface ICorporateCheckInDetails {
   department?: string;
   visitPurpose?: string;
 
-
   remarks?: string;
 }
 
 export interface ICheckIn extends Document {
   bookingId: mongoose.Types.ObjectId;
-  roomIds: mongoose.Types.ObjectId[];
+   roomDetails: IRoomStayDetail[];
   guests: IGuestDetail[];
 
-   checkInType: "Individual" | "Corporate";
-   corporateCheckInDetails:ICorporateCheckInDetails;
+  checkInType: "Individual" | "Corporate";
+  corporateCheckInDetails: ICorporateCheckInDetails;
   checkInTime: Date;
   expectedCheckOutTime: Date;
   actualCheckOutTime?: Date;
-  
+
   status: "Active" | "Checked-Out" | "Shifted";
   stayType: "Original" | "Extended" | "Transferred";
-  
-  previousCheckInId?: mongoose.Types.ObjectId; 
-  nextCheckInId?: mongoose.Types.ObjectId; 
-  
+
+  previousCheckInId?: mongoose.Types.ObjectId;
+  nextCheckInId?: mongoose.Types.ObjectId;
+ 
+  advancePayments: IAdvancePayment[];
+  totalAdvanceAmount: number;
+
   extraBed: {
     hasExtraBed: boolean;
     chargePerNight: number;
   };
-  
+
   isBilled: boolean;
   notes?: string;
 }
@@ -79,10 +97,23 @@ export interface ICheckIn extends Document {
 const CheckInSchema = new Schema<ICheckIn>(
   {
     bookingId: { type: Schema.Types.ObjectId, ref: "Booking", required: true },
-  roomIds: [{ type: Schema.Types.ObjectId, ref: "Room", required: true }],
+
+    // ✅ ROOM TRACKING: roomIds er poriborte amra roomDetails use korbo
+    // jate protiti room er alada applied price thake
+    roomDetails: [
+      {
+        roomId: { type: Schema.Types.ObjectId, ref: "Room", required: true },
+        roomType: { type: Schema.Types.ObjectId, ref: "RoomType" },
+        roomNumber: { type: String },
+        originalPrice: { type: Number },
+        appliedPrice: { type: Number }, // Ekhane discount ba manual adjustment thakbe
+      },
+    ],
+
     guests: [
       {
         name: { type: String, required: true },
+        mobileNo: { type: String },
         idType: { type: String },
         idNumber: { type: String },
         idDocument: {
@@ -93,81 +124,101 @@ const CheckInSchema = new Schema<ICheckIn>(
       },
     ],
 
-
     checkInType: {
-  type: String,
-  enum: ["Individual", "Corporate"],
-  default: "Individual"
-},
+      type: String,
+      enum: ["Individual", "Corporate"],
+      default: "Individual",
+    },
 
+    corporateCheckInDetails: {
+      companyName: { type: String },
 
-corporateCheckInDetails: {
-  companyName: { type: String },
-  companyGST: { type: String },
-  companyAddress: { type: String },
-  companyEmail: { type: String },
-  companyPhone: { type: String },
+      companyGST: { type: String },
 
-  contactPersonName: { type: String },
-  designation: { type: String },
-  contactMobile: { type: String },
-  contactEmail: { type: String },
+      companyAddress: { type: String },
 
-  contactIdType: { type: String },
-  contactIdNumber: { type: String },
+      companyEmail: { type: String },
 
-  contactIdDocument: {
-    public_id: { type: String },
-    secure_url: { type: String },
-  },
+      companyPhone: { type: String },
 
-  guestListImage: {
-    public_id: { type: String },
-    secure_url: { type: String },
-  },
+      contactPersonName: { type: String },
 
-  companyDocument: {
-    public_id: { type: String },
-    secure_url: { type: String },
-  },
+      designation: { type: String },
 
-  totalGuests: { type: Number },
-  department: { type: String },
-  visitPurpose: { type: String },
+      contactMobile: { type: String },
 
+      contactEmail: { type: String },
 
+      contactIdType: { type: String },
 
-  remarks: { type: String },
-},
-    
+      contactIdNumber: { type: String },
+
+      contactIdDocument: {
+        public_id: { type: String },
+
+        secure_url: { type: String },
+      },
+
+      guestListImage: {
+        public_id: { type: String },
+
+        secure_url: { type: String },
+      },
+
+      companyDocument: {
+        public_id: { type: String },
+
+        secure_url: { type: String },
+      },
+
+      totalGuests: { type: Number },
+
+      department: { type: String },
+
+      visitPurpose: { type: String },
+
+      remarks: { type: String },
+    },
+
     checkInTime: { type: Date, required: true },
     expectedCheckOutTime: { type: Date, required: true },
     actualCheckOutTime: { type: Date },
-    
+
     status: {
       type: String,
       enum: ["Active", "Checked-Out", "Shifted"],
       default: "Active",
     },
-    
+
     stayType: {
       type: String,
       enum: ["Original", "Extended", "Transferred"],
       default: "Original",
     },
 
-    previousCheckInId: { type: Schema.Types.ObjectId, ref: "CheckIn" },
-    nextCheckInId: { type: Schema.Types.ObjectId, ref: "CheckIn" },
+    advancePayments: [
+      {
+        amount: { type: Number, default: 0 },
+        paymentMode: { type: String, enum: ["Cash", "Online", "Card"] },
+        transactionId: { type: String },
+        paidAt: { type: Date, default: Date.now },
+        note: { type: String },
+      },
+    ],
+    totalAdvanceAmount: { type: Number, default: 0 },
 
     extraBed: {
       hasExtraBed: { type: Boolean, default: false },
-      chargePerNight: { type: Number, default: 0 }
+      chargePerNight: { type: Number, default: 0 },
     },
 
     isBilled: { type: Boolean, default: false },
     notes: { type: String },
+
+    previousCheckInId: { type: Schema.Types.ObjectId, ref: "CheckIn" },
+    nextCheckInId: { type: Schema.Types.ObjectId, ref: "CheckIn" },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 CheckInSchema.index({ bookingId: 1, status: 1 });
