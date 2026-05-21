@@ -2,372 +2,736 @@ import { Request, Response } from "express";
 import { Booking } from "../models/booking.model";
 import { CheckIn } from "../models/checkin.model";
 import { Room } from "../models/room.model";
+import { Billing } from "../models/billing.model";
 import { uploadFile } from "../services/cloudinary.service";
-import { startOfDay, endOfDay } from "date-fns";
+import { startOfDay, addDays, differenceInDays } from "date-fns";
 import mongoose from "mongoose";
+import fileUpload from "express-fileupload";
+
+type UploadedFile = fileUpload.UploadedFile;
+type UploadedFiles = { [key: string]: UploadedFile | UploadedFile[] };
 
 
-export const processCheckIn = async (req: Request, res: Response) => {
+export const processCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
+  const mongoSession = await mongoose.startSession();
+  mongoSession.startTransaction();
+
   try {
+
+    const payload = typeof req.body.payload === "string"
+      ? JSON.parse(req.body.payload)
+      : req.body;
+
     const {
       bookingId,
       checkInType,
       roomSelections,
       corporateData,
-      extraBed,
+      primaryGuest,
+      guests,
+      vehicleDetails,
+      specialRequests,
+      checkInTime,
+      expectedCheckOutTime,
+      generateGRC,
       advancePayments,
       totalAdvanceAmount,
       notes,
-    } = req.body;
+    } = payload;
 
-    const booking = await Booking.findById(bookingId);
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found",
-      });
+    const files = req.files || {};
+
+    const guestDocFiles: UploadedFile[] = [];
+    if (files.guestDocuments) {
+      if (Array.isArray(files.guestDocuments)) {
+        guestDocFiles.push(...files.guestDocuments);
+      } else {
+        guestDocFiles.push(files.guestDocuments);
+      }
     }
 
-    const selections = roomSelections ? JSON.parse(roomSelections) : [];
+    let signedGRCFile: UploadedFile | null = null;
+    if (files.signedGRC) {
+      signedGRCFile = Array.isArray(files.signedGRC) ? files.signedGRC[0] : files.signedGRC;
+    }
 
-    const parsedExtraBed = extraBed
-      ? JSON.parse(extraBed)
-      : {
-          hasExtraBed: false,
-          chargePerNight: 0,
+
+    const guestDocMap: Record<string, { public_id: string; secure_url: string }> = {};
+
+
+    let guestDocIndices: number[] = [];
+    const rawIndices = req.body.guestDocIndices;
+    if (rawIndices) {
+      guestDocIndices = typeof rawIndices === "string"
+        ? JSON.parse(rawIndices)
+        : rawIndices;
+    }
+    const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
+
+    for (let i = 0; i < guestDocFiles.length; i++) {
+      const file = guestDocFiles[i];
+      const guestIndex = guestDocIndices[i] ?? i;
+      const guestId = parsedGuests[guestIndex]?.id || `guest_${guestIndex}`;
+
+      try {
+        const result = await uploadFile(file.tempFilePath, "guest-documents", file.mimetype);
+        guestDocMap[guestId] = {
+          public_id: result.public_id,
+          secure_url: result.secure_url,
         };
+      } catch (uploadErr) {
+        console.error("Guest doc upload failed:", uploadErr);
+        guestDocMap[guestId] = { public_id: "", secure_url: "" };
+      }
+    }
+
+
+    let signedGRCData: { public_id: string; secure_url: string } | null = null;
+
+    if (signedGRCFile && signedGRCFile.tempFilePath) {
+      try {
+        const result = await uploadFile(signedGRCFile.tempFilePath, "signed-grc", signedGRCFile.mimetype);
+        signedGRCData = {
+          public_id: result.public_id,
+          secure_url: result.secure_url,
+        };
+      } catch (uploadErr) {
+        console.error("Signed GRC upload failed:", uploadErr);
+      }
+    }
+
+    const booking = await Booking.findById(bookingId).session(mongoSession);
+    if (!booking) {
+      throw new Error("Booking not found");
+    }
+
+    let selections = [];
+    if (roomSelections) {
+      selections = typeof roomSelections === 'string' ? JSON.parse(roomSelections) : roomSelections;
+    } else if (booking.rooms && booking.rooms.length > 0) {
+      selections = booking.rooms.map((r: any) => ({
+        roomId: r.roomId,
+        roomType: r.roomType,
+        originalPrice: r.pricePerNight || 0,
+        appliedPrice: r.pricePerNight || 0,
+        hasExtraBed: r.hasExtraBed || false,
+        extraBedCharge: r.extraBedCharge || 0,
+      }));
+    }
 
     const parsedPayments = advancePayments
-      ? JSON.parse(advancePayments)
+      ? (typeof advancePayments === 'string' ? JSON.parse(advancePayments) : advancePayments)
       : [];
 
+    const parsedCorporateData = corporateData
+      ? (typeof corporateData === 'string' ? JSON.parse(corporateData) : corporateData)
+      : {};
+
+    const parsedVehicles = vehicleDetails || [];
     const parsedTotalAdvance = Number(totalAdvanceAmount || 0);
 
     const createdCheckIns = [];
 
-    // =====================================================
-    // CASE 1: INDIVIDUAL = ONE ROOM ONE CHECK-IN
-    // =====================================================
-    if (checkInType === "Individual") {
-      for (let i = 0; i < selections.length; i++) {
-        const selection = selections[i];
+    const grcNumber = `GRC-${Date.now().toString().slice(-6)}`;
+    const checkInId = `CHK-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-6)}`;
 
-        let idDoc = {
-          public_id: "",
-          secure_url: "",
-        };
+    const guestList = parsedGuests.map((g: any, idx: number) => {
+      const guestId = g.id || `guest_${idx}`;
+      const uploadedDoc = guestDocMap[guestId];
 
-        const fileKey = `idProof_${i}`;
-
-        if (req.files && (req.files as any)[fileKey]) {
-          const file = (req.files as any)[fileKey];
-
-          const upload = await uploadFile(
-            file.tempFilePath,
-            "individual_ids",
-            file.mimetype
-          );
-
-          idDoc = {
-            public_id: upload.public_id,
-            secure_url: upload.secure_url,
-          };
-        }
-
-        const roomInfo = await Room.findById(selection.roomId);
-
-        const bookedRoom = booking.rooms.find(
-          (r: any) =>
-            r.roomId &&
-            r.roomId.toString() === selection.roomId.toString()
-        );
-
-        const newCheckIn = await CheckIn.create({
-          bookingId: booking._id,
-
-          roomDetails: [
-            {
-              roomId: selection.roomId,
-              roomType: roomInfo?.roomType,
-              roomNumber: roomInfo?.roomNumber || "",
-              originalPrice: roomInfo?.basePrice || 0,
-              appliedPrice:
-                selection.appliedPrice ||
-                roomInfo?.basePrice ||
-                0,
-            },
-          ],
-
-          checkInType: "Individual",
-
-          guests: [
-            {
-              name: selection.guestNames?.[0] || "",
-              mobileNo: selection.mobileNos?.[0] || "",
-              idType: "Aadhar Card",
-              idNumber: selection.idNumber || "",
-              idDocument: idDoc,
-              isPrimary: true,
-            },
-          ],
-
-          checkInTime: new Date(),
-
-          expectedCheckOutTime:
-            bookedRoom?.checkOutDate || new Date(),
-
-          extraBed: parsedExtraBed,
-
-          advancePayments:
-            i === 0 ? parsedPayments : [],
-
-          totalAdvanceAmount:
-            i === 0 ? parsedTotalAdvance : 0,
-
-          status: "Active",
-
-          notes,
-        });
-
-        await Room.findByIdAndUpdate(selection.roomId, {
-          status: "Occupied",
-        });
-
-        createdCheckIns.push(newCheckIn);
+      // Check multiple sources for the document:
+      // 1. Newly uploaded document (from this session)
+      // 2. Document passed in the payload (existing document URL)
+      // 3. Document already in DB (fallback)
+      let finalDoc = { public_id: "", secure_url: "" };
+      if (uploadedDoc?.secure_url) {
+        finalDoc = uploadedDoc;
+      } else if (g.idDocument?.secure_url && g.idDocument.secure_url.startsWith("http")) {
+        // Document URL passed from frontend (existing document)
+        finalDoc = g.idDocument;
       }
-    }
 
-    // =====================================================
-    // CASE 2: CORPORATE = MULTI ROOM SINGLE CHECK-IN
-    // =====================================================
-    else if (checkInType === "Corporate") {
-      const corpInfo = corporateData
-        ? JSON.parse(corporateData)
-        : {};
-
-      let guestListDoc = {
-        public_id: "",
-        secure_url: "",
+      return {
+        name: g.name || "",
+        mobileNo: g.mobileNo || "",
+        idType: g.idType || "Aadhar Card",
+        idNumber: g.idNumber || "",
+        gender: g.gender || "",
+        age: g.age ? Number(g.age) : undefined,
+        nationality: g.nationality || "Indian",
+        isPrimary: g.isPrimary || idx === 0,
+        assignedRoomId: g.assignedRoomId
+          ? new mongoose.Types.ObjectId(g.assignedRoomId)
+          : undefined,
+        idDocument: finalDoc,
       };
+    });
 
-      if (req.files && (req.files as any).guestListFile) {
-        const file = (req.files as any).guestListFile;
+    const checkInTimeVal = checkInTime ? new Date(checkInTime) : new Date();
+    const checkOutTimeVal = expectedCheckOutTime
+      ? new Date(expectedCheckOutTime)
+      : (booking.rooms?.[0]?.checkOutDate || addDays(new Date(), 1));
 
-        const upload = await uploadFile(
-          file.tempFilePath,
-          "corporate_docs",
-          file.mimetype
-        );
+    // Calculate nights for billing
+    let nights = Math.max(1, differenceInDays(
+      startOfDay(checkOutTimeVal),
+      startOfDay(checkInTimeVal)
+    ));
 
-        guestListDoc = {
-          public_id: upload.public_id,
-          secure_url: upload.secure_url,
-        };
-      }
+    const roomDetails = [];
+    const roomIds = [];
 
-      const roomDetails = [];
+    for (const sel of selections) {
+      const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
+      const roomId = sel.roomId || sel._id;
 
-      const allRoomIds = [];
-
-      for (const selection of selections) {
-        const roomInfo = await Room.findById(selection.roomId);
-
-        roomDetails.push({
-          roomId: selection.roomId,
-          roomType: roomInfo?.roomType,
-          roomNumber: roomInfo?.roomNumber || "",
-          originalPrice: roomInfo?.basePrice || 0,
-          appliedPrice:
-            selection.appliedPrice ||
-            roomInfo?.basePrice ||
-            0,
-        });
-
-        allRoomIds.push(selection.roomId);
-      }
-
-      const masterCheckIn = await CheckIn.create({
-        bookingId: booking._id,
-
-        roomDetails,
-
-        checkInType: "Corporate",
-
-        corporateCheckInDetails: {
-          ...corpInfo,
-          guestListImage: guestListDoc,
-        },
-
-        guests: [
-          {
-            name: corpInfo.contactPersonName || "",
-            mobileNo: corpInfo.contactMobile || "",
-            isPrimary: true,
-          },
-        ],
-
-        checkInTime: new Date(),
-
-        expectedCheckOutTime:
-          booking.rooms?.[0]?.checkOutDate || new Date(),
-
-        extraBed: parsedExtraBed,
-
-        advancePayments: parsedPayments,
-
-        totalAdvanceAmount: parsedTotalAdvance,
-
-        status: "Active",
-
-        notes,
+      roomDetails.push({
+        roomId: new mongoose.Types.ObjectId(roomId),
+        roomType: sel.roomType || roomInfo?.roomType,
+        roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
+        originalPrice: sel.originalPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
+        appliedPrice: sel.appliedPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
+        assignedAt: new Date(),
       });
-
-      await Room.updateMany(
-        { _id: { $in: allRoomIds } },
-        { status: "Occupied" }
-      );
-
-      createdCheckIns.push(masterCheckIn);
+      roomIds.push(roomId);
     }
 
-    // =====================================================
-    // BOOKING STATUS UPDATE
-    // =====================================================
+
+    const grcDetails = generateGRC ? [{
+      grcNumber,
+      grcType: checkInType === "Corporate" ? "Corporate" : "Individual",
+      generatedAt: new Date(),
+      generatedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+      isSigned: !!signedGRCData,
+      signedPdfUrl: signedGRCData ? {
+        public_id: signedGRCData.public_id || "",
+        secure_url: signedGRCData.secure_url || "",
+      } : undefined,
+      signedAt: signedGRCData ? new Date() : undefined,
+      signatureMethod: signedGRCData ? "Digital" : undefined,
+    }] : [];
+
+    const validPaymentModes = ["Cash", "UPI", "Card", "Bank Transfer", "Wallet", "Online"];
+
+    const newCheckIn = new CheckIn({
+      checkInId,
+      bookingId: booking._id,
+      bookingCategory: "Room Stay",
+      checkInType: checkInType || "Individual",
+      roomDetails,
+      guests: guestList,
+      checkInTime: checkInTimeVal,
+      expectedCheckOutTime: checkOutTimeVal,
+      status: "Active",
+      stayType: "Original",
+      paymentStatus: parsedTotalAdvance > 0
+        ? (parsedTotalAdvance >= (booking.pricingSummary?.grandTotal || 0) ? "Paid" : "Partial")
+        : "Pending",
+      paymentSummary: {
+        totalAmount: booking.pricingSummary?.grandTotal || 0,
+        totalPaid: parsedTotalAdvance,
+        dueAmount: (booking.pricingSummary?.grandTotal || 0) - parsedTotalAdvance,
+        taxAmount: booking.pricingSummary?.taxAmount || 0,
+      },
+      payments: parsedPayments.map((p: any) => ({
+        amount: p.amount,
+        paymentMode: validPaymentModes.includes(p.paymentMode) ? p.paymentMode : "Cash",
+        transactionId: p.transactionId || "",
+        paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+        note: p.note || "",
+      })),
+      grcDetails,
+      vehicleDetails: parsedVehicles,
+      notes: notes || "",
+      specialRequests: specialRequests || "",
+      liabilityAccepted: true,
+      termsAcceptedAt: new Date(),
+      verificationChecklist: {
+        primaryGuestVerified: guestList.some((g: any) => g.isPrimary && g.name),
+        idUploaded: guestList.some((g: any) => g.idDocument?.secure_url),
+        grcGenerated: !!generateGRC,
+        paymentCollected: parsedTotalAdvance > 0,
+        roomAssigned: true,
+      },
+      activityLogs: [{
+        action: "Check-in Created via Single-Call Process",
+        performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        timestamp: new Date(),
+        details: `${checkInType || "Individual"} check-in. ${selections.length} room(s), ${parsedGuests.length} guest(s).`,
+      }],
+    });
+
+    await newCheckIn.save({ session: mongoSession });
+    createdCheckIns.push(newCheckIn);
 
     const totalBookedRooms = booking.rooms.length;
-
     const totalCheckedRooms = createdCheckIns.reduce(
-      (sum: number, item: any) =>
-        sum + (item.roomDetails?.length || 0),
+      (sum: number, item: any) => sum + (item.roomDetails?.length || 0),
       0
     );
 
-    if (totalCheckedRooms >= totalBookedRooms) {
-      booking.status = "Checked-In";
+    booking.status = totalCheckedRooms >= totalBookedRooms ? "Checked-In" : "Checked-In";
+    await booking.save({ session: mongoSession });
+
+    const roomChargesBreakdown = roomDetails.map((room: any) => {
+      const rate = room.appliedPrice || 0;
+      const totalCharge = nights * rate;
+      return {
+        roomId: room.roomId,
+        roomNumber: room.roomNumber,
+        checkInDate: checkInTimeVal,
+        checkOutDate: checkOutTimeVal,
+        nights,
+        ratePerNight: rate,
+        totalRoomCharge: totalCharge,
+        stayType: "Original" as const,
+      };
+    });
+
+    const totalRoomCharges = roomChargesBreakdown.reduce(
+      (sum: number, r: any) => sum + r.totalRoomCharge,
+      0
+    );
+
+    let billing = await Billing.findOne({ bookingId: booking._id }).session(mongoSession);
+
+
+    if (!billing) {
+      const count = await Billing.countDocuments({}).session(mongoSession);
+      billing = new Billing({
+        invoiceNumber: `INV-${Date.now()}-${count + 1}`,
+        invoiceType: checkInType === "Corporate" ? "Corporate" : "Room",
+        billingStatus: "Draft",
+        settlementStatus: "Open",
+        checkInId: newCheckIn._id,
+        bookingId: booking._id,
+        customerId: (booking.customerId as mongoose.Types.ObjectId) || new mongoose.Types.ObjectId(),
+        isCorporateBill: checkInType === "Corporate",
+        corporateDetails: checkInType === "Corporate" && parsedCorporateData ? {
+          companyName: parsedCorporateData.companyName || "",
+          companyGST: parsedCorporateData.companyGST || "",
+          companyAddress: parsedCorporateData.companyAddress || "",
+          contactPerson: parsedCorporateData.contactPersonName || "",
+          contactEmail: parsedCorporateData.contactEmail || "",
+        } : undefined,
+        roomChargesBreakdown,
+        totalRoomCharges,
+        extraServices: [],
+        facilityCharges: [],
+        packageCharges: [],
+        otherCharges: 0,
+        subTotal: totalRoomCharges,
+        taxBreakdown: {
+          cgst: (booking.pricingSummary?.taxAmount || 0) / 2,
+          sgst: (booking.pricingSummary?.taxAmount || 0) / 2,
+          serviceCharge: 0,
+          cess: 0,
+          totalTax: booking.pricingSummary?.taxAmount || 0,
+        },
+        discount: 0,
+        grandTotal: totalRoomCharges + (booking.pricingSummary?.taxAmount || 0),
+        paidAmount: parsedTotalAdvance,
+        dueAmount: (totalRoomCharges + (booking.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
+        paymentStatus: parsedTotalAdvance > 0 ? "Partial" : "Unpaid",
+        paymentModeSummary: {
+          cash: parsedPayments.filter((p: any) => p.paymentMode === "Cash").reduce((s: number, p: any) => s + Number(p.amount), 0),
+          upi: parsedPayments.filter((p: any) => p.paymentMode === "UPI").reduce((s: number, p: any) => s + Number(p.amount), 0),
+          card: parsedPayments.filter((p: any) => p.paymentMode === "Card").reduce((s: number, p: any) => s + Number(p.amount), 0),
+          bankTransfer: parsedPayments.filter((p: any) => p.paymentMode === "Bank Transfer").reduce((s: number, p: any) => s + Number(p.amount), 0),
+          wallet: parsedPayments.filter((p: any) => p.paymentMode === "Wallet").reduce((s: number, p: any) => s + Number(p.amount), 0),
+        },
+
+        payments: parsedPayments.map((p: any) => ({
+          amount: p.amount,
+          paymentMode: validPaymentModes.includes(p.paymentMode) ? p.paymentMode : "Cash",
+          transactionId: p.transactionId || "",
+          paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+          note: p.note || "",
+        })),
+        billingNotes: [],
+        activityLogs: [{
+          action: "Billing Created on Check-in",
+          performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+          timestamp: new Date(),
+          details: `Check-in billing initiated. Advance: ₹${parsedTotalAdvance}`,
+        }],
+      });
     } else {
-      booking.status = "Checked-In";
+      billing.checkInId = newCheckIn._id;
+
+      const existingRoomIds = billing.roomChargesBreakdown.map(r => r.roomId.toString());
+      const newRoomCharges = roomChargesBreakdown.filter(
+        r => !existingRoomIds.includes(r.roomId.toString())
+      );
+
+      if (newRoomCharges.length > 0) {
+        billing.roomChargesBreakdown.push(...newRoomCharges);
+        billing.totalRoomCharges = billing.roomChargesBreakdown.reduce(
+          (sum: number, r: any) => sum + r.totalRoomCharge,
+          0
+        );
+        billing.subTotal = billing.totalRoomCharges + billing.totalFacilityCharges;
+        billing.grandTotal = billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
+      }
+
+      const newPayments = parsedPayments.filter((p: any, idx: number) => {
+        return !billing!.payments.some((existing: any, existingIdx: number) => {
+          // If payment has transactionId, match by that
+          if (p.transactionId && existing.transactionId) {
+            return existing.transactionId === p.transactionId;
+          }
+          // If payment has no transactionId, use index-based matching to avoid false positives
+          // This ensures booking advance and check-in advance (both might have no TXN ID) don't false-match
+          if (!p.transactionId && !existing.transactionId) {
+            // Match only if same index position (booking advance is idx 0, check-in advance is idx 1)
+            return existingIdx === idx;
+          }
+          // Mixed case - one has transactionId, one doesn't - don't match
+          return false;
+        });
+      });
+
+      if (newPayments.length > 0) {
+        billing.payments.push(...newPayments.map((p: any) => ({
+          amount: p.amount,
+          paymentMode: validPaymentModes.includes(p.paymentMode) ? p.paymentMode : "Cash",
+          transactionId: p.transactionId || "",
+          paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+          note: p.note || "",
+        })));
+
+        billing.paidAmount = billing.payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+        billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
+        billing.paymentStatus = billing.dueAmount <= 0 && billing.grandTotal > 0 ? "Paid"
+          : billing.paidAmount > 0 ? "Partial" : "Unpaid";
+
+        for (const payment of newPayments) {
+          const mode = (payment.paymentMode || "Cash").toLowerCase().replace(" ", "");
+          if (mode === "cash") billing.paymentModeSummary.cash += Number(payment.amount);
+          else if (mode === "upi") billing.paymentModeSummary.upi += Number(payment.amount);
+          else if (mode === "card") billing.paymentModeSummary.card += Number(payment.amount);
+          else if (mode === "banktransfer") billing.paymentModeSummary.bankTransfer += Number(payment.amount);
+          else if (mode === "wallet") billing.paymentModeSummary.wallet += Number(payment.amount);
+          // Online mode doesn't map to any paymentModeSummary field, but we still track it in payments array
+        }
+      }
+
+      billing.activityLogs.push({
+        action: "Check-in Advance Added",
+        performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        timestamp: new Date(),
+        details: `Added advance payment: ₹${parsedTotalAdvance}`,
+      });
     }
 
-    await booking.save();
+    await billing.save({ session: mongoSession });
+
+
+    await mongoSession.commitTransaction();
+    mongoSession.endSession();
 
     return res.status(201).json({
       success: true,
       message: "Check-In Completed Successfully",
-      data: createdCheckIns,
+      data: {
+        checkIn: createdCheckIns,
+        billing: {
+          _id: billing._id,
+          invoiceNumber: billing.invoiceNumber,
+          paymentStatus: billing.paymentStatus,
+          grandTotal: billing.grandTotal,
+          paidAmount: billing.paidAmount,
+          dueAmount: billing.dueAmount,
+        },
+      },
     });
+
   } catch (error: any) {
-    console.error(error);
+
+    await mongoSession.abortTransaction();
+    mongoSession.endSession();
+
+    console.error("Check-in Error:", error);
 
     return res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Check-in failed!",
     });
   }
 };
 
+// ============================================================
+// GET CHECK-IN LIST
+// ============================================================
 export const getCheckInList = async (req: Request, res: Response) => {
   try {
     const {
       startDate,
       endDate,
-      dateType = "checkIn", 
+      dateType = "checkIn",
       roomType,
       roomId,
-      checkInType, 
-      status, 
+      checkInType,
+      status,
       search,
       page = 1,
       limit = 10,
+      quickFilter,
+      bookingCategory,
+      paymentStatus,
+      isBilled,
+      stayType,
+      grcSignedStatus,
+      guestVerificationStatus,
+      idVerificationStatus,
+      roomNumber,
+      vehicleNumber,
+      checkInId,
+      bookingId,
+      sortBy = "createdAt",
+      sortOrder = "desc",
     } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
-    let query: any = {};
+    const andConditions: any[] = [];
 
-    if (startDate || endDate) {
-      const start = startDate ? new Date(startDate as string) : startOfDay(new Date());
-      const end = endDate ? new Date(endDate as string) : endOfDay(new Date());
+    // 1. Room / Room Type Filters
+    if (roomId) {
+      andConditions.push({ "roomDetails.roomId": new mongoose.Types.ObjectId(roomId as string) });
+    } else if (roomType) {
+      const roomsUnderType = await Room.find({ roomType: roomType as any }).select("_id").lean();
+      const roomIdsUnderType = roomsUnderType.map(r => r._id);
+      andConditions.push({ "roomDetails.roomId": { $in: roomIdsUnderType } });
+    }
 
-      if (dateType === "checkIn") {
-        query.checkInTime = { $gte: start, $lte: end };
-      } 
-      else if (dateType === "expectedCheckout") {
-        query.expectedCheckOutTime = { $gte: start, $lte: end };
-      } 
-      else if (dateType === "actualCheckout") {
-        query.actualCheckOutTime = { $gte: start, $lte: end };
-      } 
-      else if (dateType === "anyCheckout") {
-        query.$or = [
-          { actualCheckOutTime: { $gte: start, $lte: end } },
-          { expectedCheckOutTime: { $gte: start, $lte: end } }
-        ];
+    // 2. Core Filters
+    if (checkInType) {
+      andConditions.push({ checkInType });
+    }
+    if (status) {
+      andConditions.push({ status });
+    }
+    if (bookingCategory) {
+      andConditions.push({ bookingCategory });
+    }
+    if (paymentStatus) {
+      andConditions.push({ paymentStatus });
+    }
+    if (isBilled !== undefined) {
+      const isBilledBool = isBilled === "true" || (isBilled as any) === true;
+      andConditions.push({ isBilled: isBilledBool });
+    }
+    if (stayType) {
+      andConditions.push({ stayType });
+    }
+
+    // 3. GRC Signed Status
+    if (grcSignedStatus) {
+      if (grcSignedStatus === "signed") {
+        andConditions.push({ "grcDetails.isSigned": true });
+      } else if (grcSignedStatus === "unsigned") {
+        andConditions.push({ "grcDetails.isSigned": { $ne: true } });
       }
     }
 
-    if (roomId) {
-      query.roomIds = new mongoose.Types.ObjectId(roomId as string);
-    }else if (roomType) {
-  const roomTypeId = roomType as string;
-
-  const roomsUnderType = await Room.find({ 
-    roomType: roomTypeId as any 
-  }).select("_id");
-
-  const roomIdsUnderType = roomsUnderType.map(r => r._id);
-  query.roomIds = { $in: roomIdsUnderType };
-}
-
-    if (checkInType) query.checkInType = checkInType;
-    if (status) query.status = status;
-
-    if (search) {
-      query.$or = [
-        { "guests.name": { $regex: search, $options: "i" } },
-        { "guests.mobileNo": { $regex: search, $options: "i" } },
-        { "corporateCheckInDetails.companyName": { $regex: search, $options: "i" } },
-        { "corporateCheckInDetails.contactMobile": { $regex: search, $options: "i" } },
-      ];
+    // 4. Guest Verification Status
+    const verificationStatus = guestVerificationStatus || idVerificationStatus;
+    if (verificationStatus) {
+      andConditions.push({ "guests.idVerificationStatus": verificationStatus });
     }
 
+    // 5. Room Number & Vehicle Number Filters
+    if (roomNumber) {
+      andConditions.push({ "roomDetails.roomNumber": { $regex: roomNumber as string, $options: "i" } });
+    }
+    if (vehicleNumber) {
+      andConditions.push({ "vehicleDetails.vehicleNumber": { $regex: vehicleNumber as string, $options: "i" } });
+    }
+
+    // 6. Check-in ID & Booking ID Filters
+    if (checkInId) {
+      andConditions.push({ checkInId: { $regex: checkInId as string, $options: "i" } });
+    }
+    if (bookingId) {
+      if (mongoose.Types.ObjectId.isValid(bookingId as string)) {
+        andConditions.push({ bookingId: new mongoose.Types.ObjectId(bookingId as string) });
+      } else {
+        const matchedBookings = await Booking.find({ bookingId: { $regex: bookingId as string, $options: "i" } })
+          .select("_id")
+          .lean();
+        const bookingIds = matchedBookings.map(b => b._id);
+        andConditions.push({ bookingId: { $in: bookingIds } });
+      }
+    }
+
+    // 7. Date Filters & Quick Date Filters
+    let start: Date | undefined;
+    let end: Date | undefined;
+
+    if (quickFilter) {
+      const now = new Date();
+      if (quickFilter === "today") {
+        start = new Date();
+        start.setHours(0, 0, 0, 0);
+        end = new Date();
+        end.setHours(23, 59, 59, 999);
+      } else if (quickFilter === "tomorrow") {
+        start = new Date();
+        start.setDate(start.getDate() + 1);
+        start.setHours(0, 0, 0, 0);
+        end = new Date();
+        end.setDate(end.getDate() + 1);
+        end.setHours(23, 59, 59, 999);
+      } else if (quickFilter === "thisWeek") {
+        const day = now.getDay();
+        const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday start
+        start = new Date(now.setDate(diff));
+        start.setHours(0, 0, 0, 0);
+        end = new Date(start);
+        end.setDate(start.getDate() + 6);
+        end.setHours(23, 59, 59, 999);
+      } else if (quickFilter === "upcomingCheckout") {
+        andConditions.push({ status: "Active" });
+        start = new Date();
+        start.setHours(0, 0, 0, 0);
+        end = new Date();
+        end.setDate(end.getDate() + 1);
+        end.setHours(23, 59, 59, 999);
+      } else if (quickFilter === "inHouse") {
+        andConditions.push({ status: "Active" });
+      }
+    } else if (startDate || endDate) {
+      start = startDate ? new Date(startDate as string) : new Date();
+      start.setHours(0, 0, 0, 0);
+      end = endDate ? new Date(endDate as string) : new Date();
+      end.setHours(23, 59, 59, 999);
+    }
+
+    if (start && end && quickFilter !== "inHouse") {
+      const targetDateType = quickFilter === "upcomingCheckout" ? "expectedCheckout" : dateType;
+
+      if (targetDateType === "checkIn") {
+        andConditions.push({ checkInTime: { $gte: start, $lte: end } });
+      } else if (targetDateType === "expectedCheckout") {
+        andConditions.push({ expectedCheckOutTime: { $gte: start, $lte: end } });
+      } else if (targetDateType === "actualCheckout") {
+        andConditions.push({ actualCheckOutTime: { $gte: start, $lte: end } });
+      } else if (targetDateType === "anyCheckout") {
+        andConditions.push({
+          $or: [
+            { actualCheckOutTime: { $gte: start, $lte: end } },
+            { expectedCheckOutTime: { $gte: start, $lte: end } }
+          ]
+        });
+      }
+    }
+
+    // 8. Global Search
+    if (search) {
+      const searchRegex = { $regex: search as string, $options: "i" };
+      const searchOrs: any[] = [
+        { checkInId: searchRegex },
+        { "guests.name": searchRegex },
+        { "guests.mobileNo": searchRegex },
+        { "corporateCheckInDetails.companyName": searchRegex },
+        { "corporateCheckInDetails.contactMobile": searchRegex },
+        { "corporateCheckInDetails.contactPersonName": searchRegex },
+        { "roomDetails.roomNumber": searchRegex },
+        { "vehicleDetails.vehicleNumber": searchRegex }
+      ];
+
+      // Support search matching booking code string
+      const matchedBookingsForSearch = await Booking.find({ bookingId: searchRegex })
+        .select("_id")
+        .lean();
+      if (matchedBookingsForSearch.length > 0) {
+        searchOrs.push({ bookingId: { $in: matchedBookingsForSearch.map(b => b._id) } });
+      }
+
+      andConditions.push({ $or: searchOrs });
+    }
+
+    const query = andConditions.length > 0 ? { $and: andConditions } : {};
+
+    // 9. Sorting & Execution
+    const sortField = (sortBy as string) || "createdAt";
+    const sortDir = (sortOrder as string) === "asc" ? 1 : -1;
+    const sortObj = { [sortField]: sortDir };
+
     const list = await CheckIn.find(query)
-      .populate("bookingId")
-     .populate({
+      .populate({
+        path: "bookingId",
+        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId"
+      })
+      .populate({
         path: "roomDetails.roomId",
-        select: "roomNumber status"
+        select: "roomNumber status roomType basePrice"
       })
       .populate({
         path: "roomDetails.roomType",
-        select: "name"
+        select: "name basePrice"
       })
-      .sort({ createdAt: -1 })
+      .sort(sortObj as any)
       .skip(skip)
-      .limit(Number(limit));
+      .limit(Number(limit))
+      .lean();
 
     const totalCount = await CheckIn.countDocuments(query);
 
-    const today = new Date();
-    const stats = await CheckIn.aggregate([
+    // 10. Advanced Aggregated Statistics
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const statsFacet = await CheckIn.aggregate([
       {
         $facet: {
           todayTotal: [
-            { $match: { checkInTime: { $gte: startOfDay(today), $lte: endOfDay(today) } } },
+            {
+              $match: {
+                checkInTime: { $gte: todayStart, $lte: todayEnd }
+              }
+            },
             { $count: "count" }
           ],
-          activeCheckins: [
-            { $match: { status: "Active" } },
-            { $count: "count" }
+          activeStats: [
+            {
+              $match: {
+                status: "Active"
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                activeCheckinsCount: { $sum: 1 },
+                activeGuestsCount: { $sum: { $size: { $ifNull: ["$guests", []] } } },
+                occupiedRoomsCount: { $sum: { $size: { $ifNull: ["$roomDetails", []] } } },
+                totalPendingDues: { $sum: { $ifNull: ["$paymentSummary.dueAmount", 0] } }
+              }
+            }
           ],
           expectedCheckoutsToday: [
-            { $match: { 
-                status: "Active", 
-                expectedCheckOutTime: { $gte: startOfDay(today), $lte: endOfDay(today) } 
-              } 
+            {
+              $match: {
+                status: "Active",
+                expectedCheckOutTime: { $gte: todayStart, $lte: todayEnd }
+              }
             },
             { $count: "count" }
           ]
         }
       }
     ]);
+
+    const todayCheckins = statsFacet[0]?.todayTotal?.[0]?.count || 0;
+    const activeStats = statsFacet[0]?.activeStats?.[0] || {
+      activeCheckinsCount: 0,
+      activeGuestsCount: 0,
+      occupiedRoomsCount: 0,
+      totalPendingDues: 0
+    };
+    const expectedCheckouts = statsFacet[0]?.expectedCheckoutsToday?.[0]?.count || 0;
 
     res.status(200).json({
       success: true,
@@ -378,9 +742,12 @@ export const getCheckInList = async (req: Request, res: Response) => {
         totalPages: Math.ceil(totalCount / Number(limit)),
       },
       stats: {
-        todayCheckins: stats[0].todayTotal[0]?.count || 0,
-        activeGuests: stats[0].activeCheckins[0]?.count || 0,
-        expectedCheckouts: stats[0].expectedCheckoutsToday[0]?.count || 0,
+        todayCheckins,
+        activeGuests: activeStats.activeCheckinsCount, // backwards compatible count of active checkins
+        expectedCheckouts,
+        occupiedRooms: activeStats.occupiedRoomsCount,
+        pendingDues: activeStats.totalPendingDues,
+        totalInHouseGuests: activeStats.activeGuestsCount
       }
     });
 
@@ -389,20 +756,22 @@ export const getCheckInList = async (req: Request, res: Response) => {
   }
 };
 
-
+// ============================================================
+// EXTEND STAY
+// ============================================================
 export const extendStay = async (req: Request, res: Response) => {
   try {
-    const { 
-      checkInId, 
-      newExpectedCheckout, 
+    const {
+      checkInId,
+      newExpectedCheckout,
       newRoomId,
-      appliedPrice,  
-      roomNumber,     
-      newAdvanceAmount,  
-      paymentMode,   
-      transactionId,     
-      advanceNote  
-    } = req.query; 
+      appliedPrice,
+      roomNumber,
+      newAdvanceAmount,
+      paymentMode,
+      transactionId,
+      advanceNote
+    } = req.query;
 
     const checkIn = await CheckIn.findById(checkInId);
     if (!checkIn) {
@@ -410,33 +779,27 @@ export const extendStay = async (req: Request, res: Response) => {
     }
 
     const oldCheckoutDate = checkIn.expectedCheckOutTime;
-    
     checkIn.expectedCheckOutTime = new Date(newExpectedCheckout as string);
     checkIn.stayType = "Extended";
 
-const roomNumberStr = roomNumber as string; 
+    const roomNumberStr = roomNumber as string;
 
-if (newRoomId) {
-  const roomObjectId = new mongoose.Types.ObjectId(newRoomId as string);
-  
-  const isAlreadyAdded = checkIn.roomDetails.some(r => r.roomId.toString() === newRoomId);
+    if (newRoomId) {
+      const roomObjectId = new mongoose.Types.ObjectId(newRoomId as string);
+      const isAlreadyAdded = checkIn.roomDetails.some(r => r.roomId.toString() === newRoomId);
 
-  if (!isAlreadyAdded) {
-    const roomInfo = await Room.findById(newRoomId);
-    
-    checkIn.roomDetails.push({
-      roomId: roomObjectId,
-      roomType: roomInfo?.roomType as any, 
-      roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string, 
-      originalPrice: roomInfo?.basePrice || 0,
-      appliedPrice: Number(appliedPrice) || roomInfo?.basePrice || 0
-    });
+      if (!isAlreadyAdded) {
+        const roomInfo = await Room.findById(newRoomId);
+        checkIn.roomDetails.push({
+          roomId: roomObjectId,
+          roomType: roomInfo?.roomType as any,
+          roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string,
+          originalPrice: roomInfo?.basePrice || 0,
+          appliedPrice: Number(appliedPrice) || roomInfo?.basePrice || 0
+        });
+      }
+    }
 
-    await Room.findByIdAndUpdate(newRoomId, { status: "Occupied" });
-  }
-}
-
- 
     if (Number(newAdvanceAmount) > 0) {
       const paymentEntry = {
         amount: Number(newAdvanceAmount),
@@ -446,20 +809,35 @@ if (newRoomId) {
         note: (advanceNote as string) || `Stay extended to ${newExpectedCheckout}`
       };
 
-      checkIn.advancePayments.push(paymentEntry);
-
+      checkIn.payments.push(paymentEntry);
       checkIn.totalAdvanceAmount = (checkIn.totalAdvanceAmount || 0) + Number(newAdvanceAmount);
     }
 
-    checkIn.notes = (checkIn.notes || "") + 
+    checkIn.notes = (checkIn.notes || "") +
       `\n[Update]: Extended from ${oldCheckoutDate.toLocaleString()} to ${newExpectedCheckout}. Additional Advance: ₹${newAdvanceAmount || 0}`;
 
     await checkIn.save();
 
-    res.status(200).json({ 
-      success: true, 
+    // Update billing as well
+    const billing = await Billing.findOne({ checkInId: checkIn._id });
+    if (billing && Number(newAdvanceAmount) > 0) {
+      billing.payments.push({
+        amount: Number(newAdvanceAmount),
+        paymentMode: (paymentMode as any) || "Cash",
+        transactionId: (transactionId as string) || "",
+        paidAt: new Date(),
+        note: (advanceNote as string) || "Stay extension advance",
+      });
+      billing.paidAmount = billing.payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+      billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
+      billing.paymentStatus = billing.dueAmount <= 0 ? "Paid" : "Partial";
+      await billing.save();
+    }
+
+    res.status(200).json({
+      success: true,
       message: "Stay extended and payment history updated successfully",
-      data: checkIn 
+      data: checkIn
     });
 
   } catch (error: any) {
@@ -467,8 +845,296 @@ if (newRoomId) {
   }
 };
 
+// ============================================================
+// GET CHECK-IN BY ID
+// ============================================================
+export const getCheckInById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
 
+    const checkIn = await CheckIn.findById(id)
+      .populate({
+        path: "bookingId",
+        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId rooms"
+      })
+      .populate({
+        path: "roomDetails.roomId",
+        select: "roomNumber status roomType basePrice floor wing"
+      })
+      .populate({
+        path: "roomDetails.roomType",
+        select: "name basePrice"
+      })
+      .lean();
 
+    if (!checkIn) {
+      return res.status(404).json({ success: false, message: "Check-in not found" });
+    }
+
+    const billing = await Billing.findOne({ checkInId: id }).lean();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...checkIn,
+        billing: billing || null
+      }
+    });
+
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ============================================================
+// UPDATE CHECK-IN
+// ============================================================
+export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
+  const mongoSession = await mongoose.startSession();
+  mongoSession.startTransaction();
+
+  try {
+    const { id } = req.params;
+
+    const payload = typeof req.body.payload === "string"
+      ? JSON.parse(req.body.payload)
+      : req.body;
+
+    const {
+      guests,
+      primaryGuest,
+      vehicleDetails,
+      specialRequests,
+      checkInTime,
+      expectedCheckOutTime,
+      notes,
+      corporateData,
+      roomDetails,
+      isReplaceVehicles,
+    } = payload;
+
+    const files = req.files || {};
+
+    const existingCheckIn = await CheckIn.findById(id).session(mongoSession);
+    if (!existingCheckIn) {
+      throw new Error("Check-in not found");
+    }
+
+    const guestDocFiles: UploadedFile[] = [];
+    if (files.guestDocuments) {
+      if (Array.isArray(files.guestDocuments)) {
+        guestDocFiles.push(...files.guestDocuments);
+      } else {
+        guestDocFiles.push(files.guestDocuments);
+      }
+    }
+
+    const guestDocMap: Record<string, { public_id: string; secure_url: string }> = {};
+
+    let guestDocIndices: number[] = [];
+    const rawIndices = req.body.guestDocIndices;
+    if (rawIndices) {
+      guestDocIndices = typeof rawIndices === "string"
+        ? JSON.parse(rawIndices)
+        : rawIndices;
+    }
+
+    const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
+
+    for (let i = 0; i < guestDocFiles.length; i++) {
+      const file = guestDocFiles[i];
+      const guestIndex = guestDocIndices[i] ?? i;
+      const guestId = parsedGuests[guestIndex]?.id || `guest_${guestIndex}`;
+
+      try {
+        const result = await uploadFile(file.tempFilePath, "guest-documents", file.mimetype);
+        guestDocMap[guestId] = {
+          public_id: result.public_id,
+          secure_url: result.secure_url,
+        };
+      } catch (uploadErr) {
+        console.error("Guest doc upload failed:", uploadErr);
+        guestDocMap[guestId] = { public_id: "", secure_url: "" };
+      }
+    }
+
+    if (parsedGuests.length > 0) {
+      const updatedGuests = parsedGuests.map((g: any, idx: number) => {
+        const guestId = g.id || `guest_${idx}`;
+        const uploadedDoc = guestDocMap[guestId];
+        const existingGuest = existingCheckIn.guests.find(
+          (eg: any) => eg._id?.toString() === g.id || eg.name === g.name
+        );
+
+        // Determine final document:
+        // 1. New upload takes priority
+        // 2. Document passed from frontend (existing URL) takes next priority
+        // 3. Existing document in DB as fallback
+        let finalIdDocument = existingGuest?.idDocument || { public_id: "", secure_url: "" };
+        if (uploadedDoc?.secure_url) {
+          finalIdDocument = { public_id: uploadedDoc.public_id, secure_url: uploadedDoc.secure_url };
+        } else if (g.idDocument?.secure_url && g.idDocument.secure_url.startsWith("http")) {
+          // Frontend is passing back the existing document URL
+          finalIdDocument = g.idDocument;
+        }
+
+        return {
+          _id: existingGuest?._id || new mongoose.Types.ObjectId(), // Preserve existing _id
+          name: g.name || existingGuest?.name || "",
+          mobileNo: g.mobileNo || existingGuest?.mobileNo || "",
+          idType: g.idType || existingGuest?.idType || "Aadhar Card",
+          idNumber: g.idNumber || existingGuest?.idNumber || "",
+          gender: g.gender || existingGuest?.gender || "",
+          age: g.age ? Number(g.age) : existingGuest?.age,
+          nationality: g.nationality || existingGuest?.nationality || "Indian",
+          isPrimary: g.isPrimary || idx === 0,
+          assignedRoomId: g.assignedRoomId
+            ? new mongoose.Types.ObjectId(g.assignedRoomId)
+            : existingGuest?.assignedRoomId,
+          idDocument: finalIdDocument,
+          relationship: g.relationship || existingGuest?.relationship || "",
+          dateOfBirth: g.dateOfBirth ? new Date(g.dateOfBirth) : existingGuest?.dateOfBirth,
+          livePhoto: existingGuest?.livePhoto,
+          ocrVerification: existingGuest?.ocrVerification,
+          idVerificationStatus: existingGuest?.idVerificationStatus || "Pending",
+        };
+      });
+      existingCheckIn.guests = updatedGuests;
+    }
+
+    if (checkInTime) {
+      existingCheckIn.checkInTime = new Date(checkInTime);
+    }
+    if (expectedCheckOutTime) {
+      existingCheckIn.expectedCheckOutTime = new Date(expectedCheckOutTime);
+    }
+
+    if (notes !== undefined) {
+      existingCheckIn.notes = notes;
+    }
+    if (specialRequests !== undefined) {
+      existingCheckIn.specialRequests = specialRequests;
+    }
+
+    // Always update vehicle details when provided in edit mode
+    if (vehicleDetails !== undefined) {
+      const parsedVehicles = typeof vehicleDetails === "string"
+        ? JSON.parse(vehicleDetails)
+        : vehicleDetails;
+      // Only save vehicles that have at least a vehicle number
+      const validVehicles = parsedVehicles.filter((v: any) => v.vehicleNumber && v.vehicleNumber.trim() !== "");
+      existingCheckIn.vehicleDetails = validVehicles;
+    }
+
+    if (roomDetails) {
+      const parsedRooms = typeof roomDetails === "string"
+        ? JSON.parse(roomDetails)
+        : roomDetails;
+      existingCheckIn.roomDetails = parsedRooms.map((r: any) => ({
+        roomId: new mongoose.Types.ObjectId(r.roomId),
+        roomType: r.roomType ? new mongoose.Types.ObjectId(r.roomType) : undefined,
+        roomNumber: r.roomNumber || "",
+        originalPrice: r.originalPrice || 0,
+        appliedPrice: r.appliedPrice || r.originalPrice || 0,
+        assignedAt: new Date(),
+      }));
+    }
+
+    if (corporateData && existingCheckIn.checkInType === "Corporate") {
+      const parsedCorp = typeof corporateData === "string"
+        ? JSON.parse(corporateData)
+        : corporateData;
+      existingCheckIn.corporateCheckInDetails = {
+        ...existingCheckIn.corporateCheckInDetails,
+        ...parsedCorp,
+      };
+    }
+
+    existingCheckIn.verificationChecklist = {
+      primaryGuestVerified: existingCheckIn.guests.some((g: any) => g.isPrimary && g.name),
+      idUploaded: existingCheckIn.guests.some((g: any) => g.idDocument?.secure_url),
+      grcGenerated: existingCheckIn.grcDetails?.length > 0,
+      paymentCollected: existingCheckIn.payments?.length > 0,
+      roomAssigned: existingCheckIn.roomDetails?.length > 0,
+    };
+
+    existingCheckIn.activityLogs.push({
+      action: "Check-in Updated",
+      performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+      timestamp: new Date(),
+      details: "Check-in details updated via edit mode",
+    });
+
+    await existingCheckIn.save({ session: mongoSession });
+
+    if (roomDetails) {
+      const billing = await Billing.findOne({ checkInId: existingCheckIn._id }).session(mongoSession);
+      if (billing) {
+        const checkInTimeVal = existingCheckIn.checkInTime;
+        const checkOutTimeVal = existingCheckIn.expectedCheckOutTime;
+        const nights = Math.max(1, differenceInDays(
+          startOfDay(checkOutTimeVal),
+          startOfDay(checkInTimeVal)
+        ));
+
+        const roomChargesBreakdown = existingCheckIn.roomDetails.map((room: any) => ({
+          roomId: room.roomId,
+          roomNumber: room.roomNumber,
+          checkInDate: checkInTimeVal,
+          checkOutDate: checkOutTimeVal,
+          nights,
+          ratePerNight: room.appliedPrice || 0,
+          totalRoomCharge: nights * (room.appliedPrice || 0),
+          stayType: "Original" as const,
+        }));
+
+        billing.roomChargesBreakdown = roomChargesBreakdown;
+        billing.totalRoomCharges = roomChargesBreakdown.reduce(
+          (sum: number, r: any) => sum + r.totalRoomCharge,
+          0
+        );
+        billing.subTotal = billing.totalRoomCharges + billing.totalFacilityCharges;
+        billing.grandTotal = billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
+        billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
+        billing.paymentStatus = billing.dueAmount <= 0 && billing.grandTotal > 0 ? "Paid"
+          : billing.paidAmount > 0 ? "Partial" : "Unpaid";
+
+        billing.activityLogs.push({
+          action: "Billing Updated on Check-in Edit",
+          performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+          timestamp: new Date(),
+          details: "Room details updated, billing recalculated",
+        });
+
+        await billing.save({ session: mongoSession });
+      }
+    }
+
+    await mongoSession.commitTransaction();
+    mongoSession.endSession();
+
+    return res.status(200).json({
+      success: true,
+      message: "Check-in updated successfully",
+      data: existingCheckIn,
+    });
+
+  } catch (error: any) {
+    await mongoSession.abortTransaction();
+    mongoSession.endSession();
+
+    console.error("Update Check-in Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Update failed!",
+    });
+  }
+};
+
+// ============================================================
+// GET STAY OVERVIEW
+// ============================================================
 export const getStayOverview = async (req: Request, res: Response) => {
   try {
     const { from, to } = req.query;
@@ -483,16 +1149,12 @@ export const getStayOverview = async (req: Request, res: Response) => {
     const startDate = new Date(from as string);
     const endDate = new Date(to as string);
 
-    // ===============================
-    // 1. ALL ROOMS
-    // ===============================
+    // All rooms
     const rooms = await Room.find()
       .populate("roomType", "name")
       .sort({ roomNumber: 1 });
 
-    // ===============================
-    // 2. ACTIVE CHECKINS
-    // ===============================
+    // Active check-ins
     const checkins = await CheckIn.find({
       status: "Active",
       checkInTime: { $lt: endDate },
@@ -502,19 +1164,14 @@ export const getStayOverview = async (req: Request, res: Response) => {
       .populate("roomDetails.roomId", "roomNumber")
       .populate("roomDetails.roomType", "name");
 
-    // ===============================
-    // 3. GROUP BY ROOM TYPE
-    // ===============================
+    // Group by room type
     const grouped: any = {};
 
     for (const room of rooms) {
-      const typeName =
-        (room as any).roomType?.name || "Other";
-
+      const typeName = (room as any).roomType?.name || "Other";
       if (!grouped[typeName]) {
         grouped[typeName] = [];
       }
-
       grouped[typeName].push({
         id: room._id,
         roomNumber: room.roomNumber,
@@ -524,21 +1181,12 @@ export const getStayOverview = async (req: Request, res: Response) => {
       });
     }
 
-    // ===============================
-    // 4. PUSH BOOKING BLOCKS
-    // ===============================
+    // Push booking blocks
     for (const ci of checkins) {
       for (const rd of ci.roomDetails || []) {
-        const roomId =
-  (rd.roomId as any)?._id?.toString() ||
-  rd.roomId?.toString();
-
-        const typeName =
-          (rd.roomType as any)?.name || "Other";
-
-        const targetRoom = grouped[typeName]?.find(
-          (r: any) => r.id.toString() === roomId
-        );
+        const roomId = (rd.roomId as any)?._id?.toString() || rd.roomId?.toString();
+        const typeName = (rd.roomType as any)?.name || "Other";
+        const targetRoom = grouped[typeName]?.find((r: any) => r.id.toString() === roomId);
 
         if (targetRoom) {
           targetRoom.bookings.push({
@@ -554,9 +1202,6 @@ export const getStayOverview = async (req: Request, res: Response) => {
       }
     }
 
-    // ===============================
-    // 5. FINAL ARRAY FORMAT
-    // ===============================
     const data = Object.keys(grouped).map((key) => ({
       category: key,
       rooms: grouped[key],
@@ -566,9 +1211,9 @@ export const getStayOverview = async (req: Request, res: Response) => {
       success: true,
       data,
     });
+
   } catch (error: any) {
     console.error("getStayOverview error:", error);
-
     return res.status(500).json({
       success: false,
       message: error.message,
