@@ -75,19 +75,23 @@ export interface IBooking extends Document {
   bookingCategory: "Room Stay" | "Day Access" | "Event" | "Banquet";
   bookingType: "Individual" | "Corporate";
 
-  // Rooms Array
-  rooms: IBookedRoom[];
+  // Rooms Array (Optional for Day Access bookings)
+  rooms?: IBookedRoom[];
 
-  // Overall Stay Dates
-  overallCheckInDate: Date;
-  overallCheckOutDate: Date;
-  totalNights: number;
+  // Overall Stay Dates (Optional for Day Access bookings)
+  overallCheckInDate?: Date;
+  overallCheckOutDate?: Date;
+  totalNights?: number;
+
+  // Day Access Package Reference & Visit Date
+  accessPackageId?: mongoose.Types.ObjectId;
+  visitDate?: Date;
 
   // Guest Summary
   totalAdults: number;
   totalChildren: number;
   totalGuests: number;
-  totalRooms: number;
+  totalRooms?: number;
 
   // Corporate Details
   corporateDetails?: ICorporateDetails;
@@ -103,10 +107,25 @@ export interface IBooking extends Document {
   mealPlan?: "EP" | "CP" | "MAP" | "AP";
 
   // Status
-  status: "Pending" | "Confirmed" | "Checked-In" | "Checked-Out" | "Cancelled" | "No-Show";
+  status:
+    | "Pending"
+    | "Confirmed"
+    | "Checked-In"
+    | "Checked-Out"
+    | "Cancelled"
+    | "No-Show";
 
   // Booking Source
-  source: "Website" | "Phone" | "Walk-in" | "Booking.com" | "Agoda" | "Goibibo" | "MakeMyTrip" | "Corporate" | "Travel Agent";
+  source:
+    | "Website"
+    | "Phone"
+    | "Walk-in"
+    | "Booking.com"
+    | "Agoda"
+    | "Goibibo"
+    | "MakeMyTrip"
+    | "Corporate"
+    | "Travel Agent";
 
   // OTA / External Reference
   externalBookingId?: string;
@@ -160,7 +179,11 @@ const BookingSchema = new Schema<IBooking>(
       type: String,
       default: () => `BK-${Date.now().toString().slice(-6)}`,
     },
-    customerId: { type: Schema.Types.ObjectId, ref: "Customer", required: true },
+    customerId: {
+      type: Schema.Types.ObjectId,
+      ref: "Customer",
+      required: true,
+    },
 
     // Booking Category
     bookingCategory: {
@@ -175,31 +198,45 @@ const BookingSchema = new Schema<IBooking>(
     },
 
     // Rooms Array
-    rooms: [
-      {
-        roomType: { type: Schema.Types.ObjectId, ref: "RoomType", required: true },
-        roomId: { type: Schema.Types.ObjectId, ref: "Room" },
-        checkInDate: { type: Date, required: true },
-        checkOutDate: { type: Date, required: true },
-        adults: { type: Number, default: 1 },
-        children: { type: Number, default: 0 },
-        pricePerNight: { type: Number, required: true },
-        mealPlan: { type: String, enum: ["EP", "CP", "MAP", "AP"] },
-        hasExtraBed: { type: Boolean, default: false },
-        extraBedCharge: { type: Number, default: 0 },
-      },
-    ],
+    rooms: {
+      type: [
+        {
+          roomType: {
+            type: Schema.Types.ObjectId,
+            ref: "RoomType",
+            required: true,
+          },
+          roomId: { type: Schema.Types.ObjectId, ref: "Room" },
+          checkInDate: { type: Date, required: true },
+          checkOutDate: { type: Date, required: true },
+          adults: { type: Number, default: 1 },
+          children: { type: Number, default: 0 },
+          pricePerNight: { type: Number, required: true },
+          mealPlan: { type: String, enum: ["EP", "CP", "MAP", "AP"] },
+          hasExtraBed: { type: Boolean, default: false },
+          extraBedCharge: { type: Number, default: 0 },
+        },
+      ],
+      default: undefined,
+    },
 
     // Overall Stay Dates
-    overallCheckInDate: { type: Date, required: true },
-    overallCheckOutDate: { type: Date, required: true },
-    totalNights: { type: Number, required: true },
+    overallCheckInDate: { type: Date },
+    overallCheckOutDate: { type: Date },
+    totalNights: { type: Number },
+
+    // Day Access Package Reference & Visit Date
+    accessPackageId: {
+      type: Schema.Types.ObjectId,
+      ref: "DayAccessPackage",
+    },
+    visitDate: { type: Date },
 
     // Guest Summary
     totalAdults: { type: Number, default: 1 },
     totalChildren: { type: Number, default: 0 },
     totalGuests: { type: Number, default: 1 },
-    totalRooms: { type: Number, default: 1 },
+    totalRooms: { type: Number },
 
     // Corporate Details
     corporateDetails: {
@@ -227,14 +264,31 @@ const BookingSchema = new Schema<IBooking>(
     // Status
     status: {
       type: String,
-      enum: ["Pending", "Confirmed", "Checked-In", "Checked-Out", "Cancelled", "No-Show"],
+      enum: [
+        "Pending",
+        "Confirmed",
+        "Checked-In",
+        "Checked-Out",
+        "Cancelled",
+        "No-Show",
+      ],
       default: "Pending",
     },
 
     // Booking Source
     source: {
       type: String,
-      enum: ["Website", "Phone", "Walk-in", "Booking.com", "Agoda", "Goibibo", "MakeMyTrip", "Corporate", "Travel Agent"],
+      enum: [
+        "Website",
+        "Phone",
+        "Walk-in",
+        "Booking.com",
+        "Agoda",
+        "Goibibo",
+        "MakeMyTrip",
+        "Corporate",
+        "Travel Agent",
+      ],
       default: "Walk-in",
     },
 
@@ -302,13 +356,17 @@ const BookingSchema = new Schema<IBooking>(
     activityLogs: [
       {
         action: { type: String, required: true },
-        performedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+        performedBy: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
         timestamp: { type: Date, default: Date.now },
         details: { type: String },
       },
     ],
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // ==========================================

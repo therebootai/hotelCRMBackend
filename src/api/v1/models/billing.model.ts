@@ -462,7 +462,6 @@ const BillingSchema = new Schema<IBilling>(
 // INDEXES
 // ==========================================
 
-BillingSchema.index({ invoiceNumber: 1 }, { unique: true });
 BillingSchema.index({ bookingId: 1 });
 BillingSchema.index({ checkInId: 1 });
 BillingSchema.index({ customerId: 1 });

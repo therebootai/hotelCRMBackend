@@ -4,7 +4,7 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch --env-file=.env --clear-screen=false src/index.ts",
+    "dev": "nodemon --ext ts,json --exec tsx --env-file=.env src/index.ts",
     "type-check": "tsc --noEmit",
     "build": "tsc",
     "preview": "tsx src/index.ts",
@@ -34,6 +34,7 @@
     "@types/express-fileupload": "^1.5.1",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.6.0",
+    "nodemon": "^3.1.14",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }

@@ -534,7 +534,6 @@ const CheckInSchema = new Schema<ICheckIn>(
 // INDEXES
 // ==========================================
 
-CheckInSchema.index({ checkInId: 1 }, { unique: true });
 CheckInSchema.index({ bookingId: 1, status: 1 });
 CheckInSchema.index({ checkInTime: 1 });
 CheckInSchema.index({ expectedCheckOutTime: 1 });
