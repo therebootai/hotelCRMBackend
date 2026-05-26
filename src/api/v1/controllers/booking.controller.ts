@@ -11,6 +11,12 @@ import { RoomType } from "../models/roomType.model";
 import { Amenity } from "../models/amenity.model";
 import { PricingRule } from "../models/pricingRule.model";
 import DayAccessPackage from "../models/accessPackage.model";
+import { transitionBookingState } from "../services/bookingStateMachine.service";
+import { recordCharge, recordPayment, recordRefund } from "../services/paymentLedger.service";
+import { recordGstEntry } from "../services/gstLedger.service";
+import { sendNotificationToRole, createNotification } from "../services/notification.service";
+
+
 
 
 interface IRoomAvailabilitySearch {
@@ -176,10 +182,12 @@ export const createOrUpdateBilling = async (
   packageName?: string,
   packageType?: string,
   packageRate?: number,
-  quantity?: number
+  quantity?: number,
+  opts?: { session?: mongoose.ClientSession }
 ): Promise<IBilling> => {
+  const session = opts?.session;
   // Check if billing already exists for this booking
-  let billing = await Billing.findOne({ bookingId });
+  let billing = await Billing.findOne({ bookingId }).session(session || null);
 
   let subTotal = 0;
   let roomChargesBreakdown: any[] = [];
@@ -286,8 +294,9 @@ export const createOrUpdateBilling = async (
       : [],
   };
 
-  if (!billing) {
-    const count = await Billing.countDocuments();
+  const isNew = !billing;
+  if (isNew) {
+    const count = await Billing.countDocuments().session(session || null);
     billingPayload.invoiceNumber = `INV-${Date.now()}-${count + 1}`;
     billingPayload.generatedBy = userId;
     billingPayload.generatedAt = new Date();
@@ -297,7 +306,29 @@ export const createOrUpdateBilling = async (
     Object.assign(billing, billingPayload);
   }
 
-  await billing.save();
+  await billing.save({ session });
+
+  const operatorId = userId || new mongoose.Types.ObjectId();
+  if (isNew) {
+    await recordCharge(billing._id, bookingId, grandTotal, operatorId, { session });
+  }
+
+  if (paymentAmount && paymentAmount > 0) {
+    await recordPayment(
+      billing._id,
+      bookingId,
+      paymentAmount,
+      (paymentMode || "Cash") as any,
+      "Booking Advance",
+      operatorId,
+      "Advance payment at booking",
+      { session }
+    );
+  }
+
+  const customer = await Customer.findById(customerId).session(session || null);
+  await recordGstEntry(billing, customer ? customer.name : "Guest", customer ? customer.companyGST : undefined, { session });
+
   return billing;
 };
 
@@ -800,6 +831,26 @@ export const createBooking = async (req: Request, res: Response) => {
       );
     }
 
+    // Notification: new booking confirmed
+    if (status === "Confirmed") {
+      try {
+        const guestName = customerDetails?.name || customer?.name || "Guest";
+        const roomLabel = bookingCategory === "Day Access"
+          ? (dayAccessPackage?.packageName || "Day Access")
+          : (validatedRooms.length === 1 ? `Room ${validatedRooms[0]?.roomId}` : `${validatedRooms.length} rooms`);
+        await sendNotificationToRole(
+          "Reception",
+          "booking",
+          "Booking Confirmed",
+          `New booking confirmed: ${guestName}, ${roomLabel}. Date: ${totals.overallCheckInDate?.toLocaleDateString() || req.body.visitDate || new Date().toLocaleDateString()}.`,
+          newBooking[0]._id,
+          "Booking"
+        );
+      } catch (notifErr) {
+        console.error("Failed to send booking notification:", notifErr);
+      }
+    }
+
     await session.commitTransaction();
 
     res.status(201).json({
@@ -973,7 +1024,17 @@ export const updateBooking = async (req: Request, res: Response) => {
       existingBooking.rooms = rooms;
     }
 
-    if (status) existingBooking.status = status;
+    if (status && status !== existingBooking.status) {
+      await transitionBookingState(
+        existingBooking._id,
+        status as any,
+        {
+          userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
+          notes: "Updated booking status via updateBooking"
+        },
+        { session }
+      );
+    }
     if (source) existingBooking.source = source;
     if (corporateDetails) existingBooking.corporateDetails = corporateDetails;
     if (vehicleDetails) existingBooking.vehicleDetails = vehicleDetails;
@@ -1055,7 +1116,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { reason, refundAmount = 0 } = req.body;
 
-    const booking = await Booking.findById(id);
+    const booking = await Booking.findById(id).session(session);
     if (!booking) {
       return res.status(404).json({
         success: false,
@@ -1077,7 +1138,15 @@ export const cancelBooking = async (req: Request, res: Response) => {
       });
     }
 
-    booking.status = "Cancelled";
+    await transitionBookingState(
+      booking._id,
+      "Cancelled",
+      {
+        userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        notes: `Cancelled. Reason: ${reason}`
+      },
+      { session }
+    );
     booking.cancellationDetails = {
       cancelledAt: new Date(),
       cancelledBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
@@ -1095,14 +1164,23 @@ export const cancelBooking = async (req: Request, res: Response) => {
 
     await booking.save({ session });
 
-    const billing = await Billing.findOne({ bookingId: booking._id });
+    const billing = await Billing.findOne({ bookingId: booking._id }).session(session);
     if (billing) {
+      const operatorId = (req as any).user?._id || new mongoose.Types.ObjectId();
       if (refundAmount > 0) {
+        await recordRefund(
+          billing._id,
+          booking._id,
+          refundAmount,
+          reason || "Booking Cancelled Refund",
+          operatorId,
+          { session }
+        );
         billing.refundDetails = {
           refundAmount,
           refundMethod: "Cash",
           refundedAt: new Date(),
-          reason,
+          reason: reason || "Booking Cancelled Refund",
         };
         billing.billingStatus = "Refunded";
       } else {
@@ -1110,6 +1188,21 @@ export const cancelBooking = async (req: Request, res: Response) => {
       }
       billing.settlementStatus = "Settled";
       await billing.save({ session });
+    }
+
+    // Notification: booking cancelled
+    try {
+      const guestName = booking.bookingContact?.name || "Guest";
+      await sendNotificationToRole(
+        "Manager",
+        "booking",
+        "Booking Cancelled",
+        `Booking cancelled by staff: ${guestName}. Reason: ${reason || "No reason provided"}. Refund: ₹${refundAmount || 0}.`,
+        booking._id,
+        "Booking"
+      );
+    } catch (notifErr) {
+      console.error("Failed to send cancellation notification:", notifErr);
     }
 
     await session.commitTransaction();

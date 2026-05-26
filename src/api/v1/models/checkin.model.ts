@@ -257,6 +257,8 @@ export interface ICheckIn extends Document {
 
   // Notes
   notes?: string;
+  specialRequests?: string;
+  totalAdvanceAmount?: number;
 
   // Activity Logs
   activityLogs: IActivityLog[];
@@ -512,6 +514,8 @@ const CheckInSchema = new Schema<ICheckIn>(
 
     // Notes
     notes: { type: String },
+    specialRequests: { type: String },
+    totalAdvanceAmount: { type: Number, default: 0 },
 
     // Activity Logs
     activityLogs: [
