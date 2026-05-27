@@ -11,6 +11,7 @@ import fileUpload from "express-fileupload";
 type UploadedFile = fileUpload.UploadedFile;
 type UploadedFiles = { [key: string]: UploadedFile | UploadedFile[] };
 import { sendNotificationToRole } from "../services/notification.service";
+import DayAccessPackage from "../models/accessPackage.model";
 
 
 export const processCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
@@ -173,30 +174,67 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       ? new Date(expectedCheckOutTime)
       : (booking.rooms?.[0]?.checkOutDate || addDays(new Date(), 1));
 
-    // Calculate nights for billing
-    let nights = Math.max(1, differenceInDays(
+    // Calculate nights for billing (Room Stay only)
+    const isDayAccess = booking.bookingCategory === "Day Access";
+
+    let nights = isDayAccess ? 1 : Math.max(1, differenceInDays(
       startOfDay(checkOutTimeVal),
       startOfDay(checkInTimeVal)
     ));
 
-    const roomDetails = [];
-    const roomIds = [];
-
-    for (const sel of selections) {
-      const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
-      const roomId = sel.roomId || sel._id;
-
-      roomDetails.push({
-        roomId: new mongoose.Types.ObjectId(roomId),
-        roomType: sel.roomType || roomInfo?.roomType,
-        roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-        originalPrice: sel.originalPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
-        appliedPrice: sel.appliedPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
-        assignedAt: new Date(),
-      });
-      roomIds.push(roomId);
+    // Fetch package details if Day Access
+    let packageDetails: any = undefined;
+    if (isDayAccess) {
+      const accessPackage = booking.accessPackageId
+        ? await DayAccessPackage.findById(booking.accessPackageId).lean()
+        : null;
+      if (accessPackage) {
+        packageDetails = {
+          packageId: accessPackage._id,
+          packageName: accessPackage.packageName,
+          packageType: accessPackage.packageType,
+          entryTime: checkInTimeVal,
+          exitTime: checkOutTimeVal,
+        };
+      }
     }
 
+    // Build room details only for Room Stay bookings
+    let roomDetails: any[] = [];
+    const roomIds: string[] = [];
+
+    if (!isDayAccess) {
+      for (const sel of selections) {
+        const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
+        const roomId = sel.roomId || sel._id;
+
+        roomDetails.push({
+          roomId: new mongoose.Types.ObjectId(roomId),
+          roomType: sel.roomType || roomInfo?.roomType,
+          roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
+          originalPrice: sel.originalPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
+          appliedPrice: sel.appliedPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
+          assignedAt: new Date(),
+        });
+        roomIds.push(roomId);
+      }
+    } else {
+      // Day Access: process room selections as flat-priced add-ons
+      for (const sel of selections) {
+        const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
+        const roomId = sel.roomId || sel._id;
+
+        roomDetails.push({
+          roomId: new mongoose.Types.ObjectId(roomId),
+          roomType: sel.roomType || roomInfo?.roomType,
+          roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
+          originalPrice: sel.originalPrice || roomInfo?.basePrice || 0,
+          appliedPrice: sel.appliedPrice || sel.originalPrice || roomInfo?.basePrice || 0,
+          assignedAt: new Date(),
+        });
+        roomIds.push(roomId);
+      }
+    }
 
     const grcDetails = generateGRC ? [{
       grcNumber,
@@ -217,7 +255,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     const newCheckIn = new CheckIn({
       checkInId,
       bookingId: booking._id,
-      bookingCategory: "Room Stay",
+      bookingCategory: booking.bookingCategory || "Room Stay",
       checkInType: checkInType || "Individual",
       roomDetails,
       guests: guestList,
@@ -247,52 +285,74 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       specialRequests: specialRequests || "",
       liabilityAccepted: true,
       termsAcceptedAt: new Date(),
+      packageDetails: isDayAccess ? packageDetails : undefined,
       verificationChecklist: {
         primaryGuestVerified: guestList.some((g: any) => g.isPrimary && g.name),
         idUploaded: guestList.some((g: any) => g.idDocument?.secure_url),
         grcGenerated: !!generateGRC,
         paymentCollected: parsedTotalAdvance > 0,
-        roomAssigned: true,
+        roomAssigned: !isDayAccess && roomDetails.length > 0,
       },
       activityLogs: [{
         action: "Check-in Created via Single-Call Process",
         performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
         timestamp: new Date(),
-        details: `${checkInType || "Individual"} check-in. ${selections.length} room(s), ${parsedGuests.length} guest(s).`,
+        details: `${checkInType || "Individual"} check-in. ${isDayAccess ? "Day Access" : selections.length + " room(s)"} checked in. ${parsedGuests.length} guest(s).`,
       }],
     });
 
     await newCheckIn.save({ session: mongoSession });
     createdCheckIns.push(newCheckIn);
 
-    const totalBookedRooms = booking.rooms.length;
+    // For Day Access bookings, rooms may be empty/undefined — use optional chaining
+    const totalBookedRooms = (booking.rooms?.length || 0);
     const totalCheckedRooms = createdCheckIns.reduce(
       (sum: number, item: any) => sum + (item.roomDetails?.length || 0),
       0
     );
 
-    booking.status = totalCheckedRooms >= totalBookedRooms ? "Checked-In" : "Checked-In";
+    booking.status = isDayAccess ? "Checked-In" : (totalCheckedRooms >= totalBookedRooms ? "Checked-In" : booking.status);
     await booking.save({ session: mongoSession });
 
-    const roomChargesBreakdown = roomDetails.map((room: any) => {
-      const rate = room.appliedPrice || 0;
-      const totalCharge = nights * rate;
-      return {
+    // Build room charges: for Room Stay use per-night, for Day Access use flat add-on price
+    let roomChargesBreakdown: any[];
+    let totalRoomCharges: number;
+
+    if (isDayAccess) {
+      // Day Access: rooms are optional add-ons with flat pricing
+      roomChargesBreakdown = roomDetails.map((room: any) => ({
         roomId: room.roomId,
         roomNumber: room.roomNumber,
         checkInDate: checkInTimeVal,
         checkOutDate: checkOutTimeVal,
-        nights,
-        ratePerNight: rate,
-        totalRoomCharge: totalCharge,
+        nights: 1,
+        ratePerNight: room.appliedPrice || 0,
+        totalRoomCharge: room.appliedPrice || 0,
         stayType: "Original" as const,
-      };
-    });
-
-    const totalRoomCharges = roomChargesBreakdown.reduce(
-      (sum: number, r: any) => sum + r.totalRoomCharge,
-      0
-    );
+      }));
+      // Package price is the base, room add-ons are on top
+      totalRoomCharges = (booking.pricingSummary?.roomTotal || booking.pricingSummary?.grandTotal || 0)
+        + roomChargesBreakdown.reduce((sum: number, r: any) => sum + r.totalRoomCharge, 0);
+    } else {
+      roomChargesBreakdown = roomDetails.map((room: any) => {
+        const rate = room.appliedPrice || 0;
+        const totalCharge = nights * rate;
+        return {
+          roomId: room.roomId,
+          roomNumber: room.roomNumber,
+          checkInDate: checkInTimeVal,
+          checkOutDate: checkOutTimeVal,
+          nights,
+          ratePerNight: rate,
+          totalRoomCharge: totalCharge,
+          stayType: "Original" as const,
+        };
+      });
+      totalRoomCharges = roomChargesBreakdown.reduce(
+        (sum: number, r: any) => sum + r.totalRoomCharge,
+        0
+      );
+    }
 
     let billing = await Billing.findOne({ bookingId: booking._id }).session(mongoSession);
 
@@ -301,7 +361,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       const count = await Billing.countDocuments({}).session(mongoSession);
       billing = new Billing({
         invoiceNumber: `INV-${Date.now()}-${count + 1}`,
-        invoiceType: checkInType === "Corporate" ? "Corporate" : "Room",
+        invoiceType: isDayAccess ? "Day Access" : (checkInType === "Corporate" ? "Corporate" : "Room"),
         billingStatus: "Draft",
         settlementStatus: "Open",
         checkInId: newCheckIn._id,
@@ -427,19 +487,21 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     await billing.save({ session: mongoSession });
 
-    // Notification: check-in completed
-    try {
-      const roomNumbers = roomDetails.map((r: any) => r.roomNumber).join(", ");
-      await sendNotificationToRole(
-        "Housekeeping",
-        "housekeeping",
-        "Check-in Completed",
-        `Guest checked in at Room(s) ${roomNumbers}. Prepare for next checkout.`,
-        newCheckIn._id,
-        "CheckIn"
-      );
-    } catch (notifErr) {
-      console.error("Failed to send checkin notification:", notifErr);
+    // Notification: check-in completed (skip room-specific notification for Day Access)
+    if (!isDayAccess) {
+      try {
+        const roomNumbers = roomDetails.map((r: any) => r.roomNumber).join(", ");
+        await sendNotificationToRole(
+          "Housekeeping",
+          "housekeeping",
+          "Check-in Completed",
+          `Guest checked in at Room(s) ${roomNumbers}. Prepare for next checkout.`,
+          newCheckIn._id,
+          "CheckIn"
+        );
+      } catch (notifErr) {
+        console.error("Failed to send checkin notification:", notifErr);
+      }
     }
 
     await mongoSession.commitTransaction();
@@ -676,7 +738,7 @@ export const getCheckInList = async (req: Request, res: Response) => {
     const list = await CheckIn.find(query)
       .populate({
         path: "bookingId",
-        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId"
+        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId accessPackageId"
       })
       .populate({
         path: "roomDetails.roomId",
@@ -886,7 +948,7 @@ export const getCheckInById = async (req: Request, res: Response) => {
     const checkIn = await CheckIn.findById(id)
       .populate({
         path: "bookingId",
-        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId rooms"
+        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId rooms accessPackageId"
       })
       .populate({
         path: "roomDetails.roomId",
