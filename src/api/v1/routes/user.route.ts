@@ -29,6 +29,8 @@ const router = Router();
 router.post("/login", validateRequest(loginSchema), login);
 router.post("/logout", logout);
 
+import { requirePermission } from "../middlewares/requirePermission.middleware";
+
 // Protected Routes (Assuming `protect` middleware ensures `req.user` exists)
 router.use(protect); 
 
@@ -36,6 +38,8 @@ router.get("/me", me);
 router.post("/change-password", validateRequest(changePasswordSchema), changePassword);
 
 // Admin / Management Routes
+router.use(requirePermission("MANAGE_USERS"));
+
 router.post("/", validateRequest(createUserSchema), createUser);
 router.get("/", getUsers);
 router.get("/:id",validateRequest(getUSerByIdSchema), getUserById);

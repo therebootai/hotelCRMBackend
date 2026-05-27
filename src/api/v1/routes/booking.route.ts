@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Router } from "express";
 import {
   getAvailableRooms,
   createBooking,
@@ -9,21 +9,31 @@ import {
   getBookingOverview,
   getBookingCalendar,
 } from "../controllers/booking.controller";
+import { validateRequest } from "@/api/v1/middlewares/validateRequest.middleware";
+import { protect } from "@/api/v1/middlewares/auth.middleware";
+import { requirePermission } from "../middlewares/requirePermission.middleware";
+import {
+  createBookingSchema,
+  updateBookingSchema,
+  cancelBookingSchema,
+  getBookingByIdSchema,
+} from "@/api/v1/validations/booking.validation";
 
-const router = express.Router();
+const router = Router();
 
-// Room Availability Search
-router.get("/available", getAvailableRooms);
+// Protect all booking routes
+router.use(protect);
 
-// Dashboard & Calendar - MUST come before /:id routes
-router.get("/overview", getBookingOverview);
-router.get("/calendar", getBookingCalendar);
+// Booking view endpoints (Accessible by booking managers or report viewers)
+router.get("/available", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getAvailableRooms);
+router.get("/overview", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getBookingOverview);
+router.get("/calendar", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getBookingCalendar);
+router.get("/list", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getAllBookings);
+router.get("/:id", validateRequest(getBookingByIdSchema), requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getBookingById);
 
-// Booking CRUD Operations
-router.post("/create", createBooking);
-router.get("/list", getAllBookings);
-router.get("/:id", getBookingById);
-router.put("/:id", updateBooking);
-router.patch("/:id/cancel", cancelBooking);
+// Booking write endpoints (Requires MANAGE_BOOKINGS permission)
+router.post("/create", validateRequest(createBookingSchema), requirePermission("MANAGE_BOOKINGS"), createBooking);
+router.put("/:id", validateRequest(updateBookingSchema), requirePermission("MANAGE_BOOKINGS"), updateBooking);
+router.patch("/:id/cancel", validateRequest(cancelBookingSchema), requirePermission("MANAGE_BOOKINGS"), cancelBooking);
 
-export default router;
+export default router;

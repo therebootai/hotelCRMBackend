@@ -28,6 +28,11 @@ import checkinRoutes from "@/api/v1/routes/checkin.route";
 import facilityRoutes from "@/api/v1/routes/facility.route";
 import extraServiceRoute from "@/api/v1/routes/extraService.route"
 import billingRoute from "@/api/v1/routes/billing.route"
+import accessPackageRoutes from "@/api/v1/routes/accessPackage.route";
+import customerRoutes from "@/api/v1/routes/customer.route";
+import notificationRoutes from "./api/v1/routes/notification.route";
+import reportingRoutes from "./api/v1/routes/reporting.route";
+
 
 
 
@@ -36,7 +41,13 @@ const app = express();
 
 app.use(
   cors({
-    origin: env.CLIENT_URL,
+    origin: (origin, callback) => {
+      if (!origin || /^http:\/\/localhost:\d+$/.test(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   }),
 );
@@ -68,6 +79,11 @@ app.use("/api/v1/checkin", checkinRoutes);
 app.use("/api/v1/facilities",facilityRoutes)
 app.use("/api/v1/extra-services",extraServiceRoute)
 app.use("/api/v1/billing",billingRoute)
+app.use("/api/v1/access-packages", accessPackageRoutes);
+app.use("/api/v1/customers", customerRoutes);
+app.use("/api/v1/notifications", notificationRoutes);
+app.use("/api/v1/reports", reportingRoutes);
+
 
 
 
@@ -83,8 +99,11 @@ app.use((req: Request, _: Response, next: NextFunction) => {
 //global error handler
 app.use(globalErrorHandler);
 
+import { seedRBAC } from "./api/v1/utils/rbacSeed";
+
 const startServer = async () => {
   await connectDB();
+  await seedRBAC();
 
   const server = app.listen(env.PORT, () => {
     console.log(`[✔] Server running on port ${env.PORT} in ${env.ENV} mode`);

@@ -10,6 +10,7 @@ import fileUpload from "express-fileupload";
 
 type UploadedFile = fileUpload.UploadedFile;
 type UploadedFiles = { [key: string]: UploadedFile | UploadedFile[] };
+import { sendNotificationToRole } from "../services/notification.service";
 
 
 export const processCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
@@ -426,6 +427,20 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     await billing.save({ session: mongoSession });
 
+    // Notification: check-in completed
+    try {
+      const roomNumbers = roomDetails.map((r: any) => r.roomNumber).join(", ");
+      await sendNotificationToRole(
+        "Housekeeping",
+        "housekeeping",
+        "Check-in Completed",
+        `Guest checked in at Room(s) ${roomNumbers}. Prepare for next checkout.`,
+        newCheckIn._id,
+        "CheckIn"
+      );
+    } catch (notifErr) {
+      console.error("Failed to send checkin notification:", notifErr);
+    }
 
     await mongoSession.commitTransaction();
     mongoSession.endSession();
@@ -795,7 +810,8 @@ export const extendStay = async (req: Request, res: Response) => {
           roomType: roomInfo?.roomType as any,
           roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string,
           originalPrice: roomInfo?.basePrice || 0,
-          appliedPrice: Number(appliedPrice) || roomInfo?.basePrice || 0
+          appliedPrice: Number(appliedPrice) || roomInfo?.basePrice || 0,
+          assignedAt: new Date(),
         });
       }
     }
@@ -832,6 +848,21 @@ export const extendStay = async (req: Request, res: Response) => {
       billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
       billing.paymentStatus = billing.dueAmount <= 0 ? "Paid" : "Partial";
       await billing.save();
+    }
+
+    // Notification: stay extended
+    try {
+      const roomNumbers = checkIn.roomDetails.map((r: any) => r.roomNumber).join(", ");
+      await sendNotificationToRole(
+        "Reception",
+        "booking",
+        "Stay Extended",
+        `Stay extended in Room(s) ${roomNumbers}. New checkout: ${new Date(newExpectedCheckout as string).toLocaleDateString()}. Additional advance: ₹${newAdvanceAmount || 0}.`,
+        checkIn._id,
+        "CheckIn"
+      );
+    } catch (notifErr) {
+      console.error("Failed to send extend stay notification:", notifErr);
     }
 
     res.status(200).json({
@@ -979,7 +1010,7 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
         }
 
         return {
-          _id: existingGuest?._id || new mongoose.Types.ObjectId(), // Preserve existing _id
+          _id: (existingGuest as any)?._id || new mongoose.Types.ObjectId(), // Preserve existing _id
           name: g.name || existingGuest?.name || "",
           mobileNo: g.mobileNo || existingGuest?.mobileNo || "",
           idType: g.idType || existingGuest?.idType || "Aadhar Card",

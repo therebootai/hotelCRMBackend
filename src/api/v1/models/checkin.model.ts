@@ -257,6 +257,8 @@ export interface ICheckIn extends Document {
 
   // Notes
   notes?: string;
+  specialRequests?: string;
+  totalAdvanceAmount?: number;
 
   // Activity Logs
   activityLogs: IActivityLog[];
@@ -512,6 +514,8 @@ const CheckInSchema = new Schema<ICheckIn>(
 
     // Notes
     notes: { type: String },
+    specialRequests: { type: String },
+    totalAdvanceAmount: { type: Number, default: 0 },
 
     // Activity Logs
     activityLogs: [
@@ -534,7 +538,6 @@ const CheckInSchema = new Schema<ICheckIn>(
 // INDEXES
 // ==========================================
 
-CheckInSchema.index({ checkInId: 1 }, { unique: true });
 CheckInSchema.index({ bookingId: 1, status: 1 });
 CheckInSchema.index({ checkInTime: 1 });
 CheckInSchema.index({ expectedCheckOutTime: 1 });

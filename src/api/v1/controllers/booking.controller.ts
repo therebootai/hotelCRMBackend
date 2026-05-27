@@ -10,6 +10,13 @@ import { Room } from "../models/room.model";
 import { RoomType } from "../models/roomType.model";
 import { Amenity } from "../models/amenity.model";
 import { PricingRule } from "../models/pricingRule.model";
+import DayAccessPackage from "../models/accessPackage.model";
+import { transitionBookingState } from "../services/bookingStateMachine.service";
+import { recordCharge, recordPayment, recordRefund } from "../services/paymentLedger.service";
+import { recordGstEntry } from "../services/gstLedger.service";
+import { sendNotificationToRole, createNotification } from "../services/notification.service";
+
+
 
 
 interface IRoomAvailabilitySearch {
@@ -169,62 +176,91 @@ export const createOrUpdateBilling = async (
   checkOutDate: Date,
   paymentAmount?: number,
   paymentMode?: string,
-  userId?: mongoose.Types.ObjectId
+  userId?: mongoose.Types.ObjectId,
+  bookingCategory?: string,
+  packageId?: mongoose.Types.ObjectId,
+  packageName?: string,
+  packageType?: string,
+  packageRate?: number,
+  quantity?: number,
+  opts?: { session?: mongoose.ClientSession }
 ): Promise<IBilling> => {
+  const session = opts?.session;
   // Check if billing already exists for this booking
-  let billing = await Billing.findOne({ bookingId });
+  let billing = await Billing.findOne({ bookingId }).session(session || null);
 
-  const totalNights = differenceInDays(checkOutDate, checkInDate) || 1;
+  let subTotal = 0;
+  let roomChargesBreakdown: any[] = [];
+  let totalRoomCharges = 0;
+  let packageCharges: any[] = [];
 
-  // Calculate room charges breakdown
-  const roomChargesBreakdown = await Promise.all(
-    rooms.map(async (room) => {
-      const roomInfo = await Room.findById(room.roomId).populate("roomType", "name");
-      const pricing = await calculateDateWisePricing(
-        room.roomId!,
-        new Date(room.checkInDate),
-        new Date(room.checkOutDate),
-        roomInfo?.basePrice || 0
-      );
+  if (bookingCategory === "Day Access" && packageId) {
+    const rate = packageRate || 0;
+    const qty = quantity || 1;
+    const total = rate * qty;
+    subTotal = total;
+    packageCharges = [{
+      packageId,
+      packageName: packageName || "Day Access Package",
+      packageType: packageType || "Premium Combo",
+      quantity: qty,
+      rate,
+      total,
+    }];
+  } else {
+    // Calculate room charges breakdown
+    roomChargesBreakdown = await Promise.all(
+      rooms.map(async (room) => {
+        const roomInfo = await Room.findById(room.roomId).populate("roomType", "name");
+        const pricing = await calculateDateWisePricing(
+          room.roomId!,
+          new Date(room.checkInDate),
+          new Date(room.checkOutDate),
+          roomInfo?.basePrice || 0
+        );
 
-      // Extra bed charge calculation
-      const extraBedCharge = room.hasExtraBed ? (room.extraBedCharge || roomInfo?.extraBedCharge || 0) * pricing.totalNights : 0;
-      const totalRoomCharge = pricing.totalPrice + extraBedCharge;
+        // Extra bed charge calculation
+        const extraBedCharge = room.hasExtraBed ? (room.extraBedCharge || roomInfo?.extraBedCharge || 0) * pricing.totalNights : 0;
+        const totalRoomCharge = pricing.totalPrice + extraBedCharge;
 
-      return {
-        roomId: room.roomId,
-        roomNumber: roomInfo?.roomNumber || "",
-        roomType: (roomInfo?.roomType as any)?.name || "",
-        checkInDate: room.checkInDate,
-        checkOutDate: room.checkOutDate,
-        nights: pricing.totalNights,
-        ratePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight,
-        totalRoomCharge,
-        extraBedCharge,
-        hasExtraBed: room.hasExtraBed || false,
-        stayType: "Original" as const,
-      };
-    })
-  );
+        return {
+          roomId: room.roomId,
+          roomNumber: roomInfo?.roomNumber || "",
+          roomType: (roomInfo?.roomType as any)?.name || "",
+          checkInDate: room.checkInDate,
+          checkOutDate: room.checkOutDate,
+          nights: pricing.totalNights,
+          ratePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight,
+          totalRoomCharge,
+          extraBedCharge,
+          hasExtraBed: room.hasExtraBed || false,
+          stayType: "Original" as const,
+        };
+      })
+    );
 
-  const totalRoomCharges = roomChargesBreakdown.reduce((sum, r) => sum + r.totalRoomCharge, 0);
+    totalRoomCharges = roomChargesBreakdown.reduce((sum, r) => sum + r.totalRoomCharge, 0);
+    subTotal = totalRoomCharges;
+  }
+
   const taxPercentage = 12; // Default 12% tax
-  const taxAmount = (totalRoomCharges * taxPercentage) / 100;
-  const grandTotal = totalRoomCharges + taxAmount;
+  const taxAmount = (subTotal * taxPercentage) / 100;
+  const grandTotal = subTotal + taxAmount;
   const paidAmount = paymentAmount || 0;
   const dueAmount = Math.max(0, grandTotal - paidAmount);
 
   const paymentStatus = dueAmount <= 0 ? "Paid" : paidAmount > 0 ? "Partial" : "Unpaid";
 
   const billingPayload: any = {
-    invoiceType: "Room",
+    invoiceType: bookingCategory === "Day Access" ? "Day Access" : "Room",
     billingStatus: "Draft",
     settlementStatus: dueAmount <= 0 ? "Settled" : "Open",
     bookingId,
     customerId,
     roomChargesBreakdown,
     totalRoomCharges,
-    subTotal: totalRoomCharges,
+    packageCharges,
+    subTotal,
     taxBreakdown: {
       cgst: taxAmount / 2,
       sgst: taxAmount / 2,
@@ -258,8 +294,9 @@ export const createOrUpdateBilling = async (
       : [],
   };
 
-  if (!billing) {
-    const count = await Billing.countDocuments();
+  const isNew = !billing;
+  if (isNew) {
+    const count = await Billing.countDocuments().session(session || null);
     billingPayload.invoiceNumber = `INV-${Date.now()}-${count + 1}`;
     billingPayload.generatedBy = userId;
     billingPayload.generatedAt = new Date();
@@ -269,7 +306,29 @@ export const createOrUpdateBilling = async (
     Object.assign(billing, billingPayload);
   }
 
-  await billing.save();
+  await billing.save({ session });
+
+  const operatorId = userId || new mongoose.Types.ObjectId();
+  if (isNew) {
+    await recordCharge(billing._id, bookingId, grandTotal, operatorId, { session });
+  }
+
+  if (paymentAmount && paymentAmount > 0) {
+    await recordPayment(
+      billing._id,
+      bookingId,
+      paymentAmount,
+      (paymentMode || "Cash") as any,
+      "Booking Advance",
+      operatorId,
+      "Advance payment at booking",
+      { session }
+    );
+  }
+
+  const customer = await Customer.findById(customerId).session(session || null);
+  await recordGstEntry(billing, customer ? customer.name : "Guest", customer ? customer.companyGST : undefined, { session });
+
   return billing;
 };
 
@@ -277,7 +336,11 @@ export const createOrUpdateBilling = async (
 export const calculateBookingTotals = async (
   rooms: IBookedRoom[],
   bookingType: string,
-  corporateDetails?: any
+  corporateDetails?: any,
+  bookingCategory?: string,
+  dayAccessPackagePrice?: number,
+  adultsCount: number = 1,
+  childrenCount: number = 0
 ): Promise<{
   roomTotal: number;
   discountAmount: number;
@@ -293,6 +356,30 @@ export const calculateBookingTotals = async (
   overallCheckInDate: Date;
   overallCheckOutDate: Date;
 }> => {
+  if (bookingCategory === "Day Access") {
+    const packageTotal = (dayAccessPackagePrice || 0) * (adultsCount + childrenCount);
+    const discountAmount = 0;
+    const taxPercentage = 12;
+    const taxAmount = (packageTotal * taxPercentage) / 100;
+    const grandTotal = packageTotal + taxAmount - discountAmount;
+
+    return {
+      roomTotal: packageTotal,
+      discountAmount,
+      taxAmount,
+      grandTotal,
+      paidAmount: 0,
+      dueAmount: grandTotal,
+      totalAdults: adultsCount,
+      totalChildren: childrenCount,
+      totalGuests: adultsCount + childrenCount,
+      totalRooms: 0,
+      totalNights: 1,
+      overallCheckInDate: new Date(),
+      overallCheckOutDate: new Date(),
+    };
+  }
+
   let roomTotal = 0;
   let totalAdults = 0;
   let totalChildren = 0;
@@ -571,59 +658,90 @@ export const createBooking = async (req: Request, res: Response) => {
 
 
     const validatedRooms: IBookedRoom[] = [];
+    let totals;
+    let dayAccessPackage = null;
 
-    for (const room of rooms) {
-      if (!room.roomId) {
+    if (bookingCategory === "Day Access") {
+      const { accessPackageId, visitDate, adults = 1, children = 0 } = req.body;
+      if (!accessPackageId || !visitDate) {
         await session.abortTransaction();
         return res.status(400).json({
           success: false,
-          message: "Room ID is required",
+          message: "accessPackageId and visitDate are required for Day Access category",
         });
       }
-
-      const availability = await checkRoomAvailability(
-        room.roomId,
-        new Date(room.checkInDate),
-        new Date(room.checkOutDate),
-        undefined // No excludeBookingId for new booking
-      );
-
-      if (!availability.isAvailable) {
+      dayAccessPackage = await DayAccessPackage.findById(accessPackageId).session(session);
+      if (!dayAccessPackage) {
         await session.abortTransaction();
-        return res.status(400).json({
+        return res.status(404).json({
           success: false,
-          message: `Room ${room.roomId} is not available: ${availability.reason}`,
+          message: "Day Access Package not found",
         });
       }
 
-      // Fetch room base price for calculation
-      const roomInfo = await Room.findById(room.roomId);
-      const pricing = await calculateDateWisePricing(
-        room.roomId,
-        new Date(room.checkInDate),
-        new Date(room.checkOutDate),
-        roomInfo?.basePrice || 0,
-        bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
+      const totalGuests = Number(adults) + Number(children);
+      const pkgPrice = dayAccessPackage.adult_price || 0; 
+      totals = await calculateBookingTotals(
+        [],
+        bookingType,
+        corporateDetails,
+        bookingCategory,
+        pkgPrice,
+        Number(adults),
+        Number(children)
       );
+    } else {
+      for (const room of rooms) {
+        if (!room.roomId) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: "Room ID is required",
+          });
+        }
 
-      // Use room's roomType or fall back to roomInfo's roomType
-      const roomTypeId = room.roomType || roomInfo?.roomType;
+        const availability = await checkRoomAvailability(
+          room.roomId,
+          new Date(room.checkInDate),
+          new Date(room.checkOutDate),
+          undefined // No excludeBookingId for new booking
+        );
 
-      validatedRooms.push({
-        roomType: roomTypeId,
-        roomId: room.roomId,
-        checkInDate: room.checkInDate,
-        checkOutDate: room.checkOutDate,
-        adults: room.adults || 1,
-        children: room.children || 0,
-        pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || roomInfo?.basePrice || 0,
-        mealPlan: room.mealPlan || mealPlan,
-      });
+        if (!availability.isAvailable) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: `Room ${room.roomId} is not available: ${availability.reason}`,
+          });
+        }
+
+        // Fetch room base price for calculation
+        const roomInfo = await Room.findById(room.roomId);
+        const pricing = await calculateDateWisePricing(
+          room.roomId,
+          new Date(room.checkInDate),
+          new Date(room.checkOutDate),
+          roomInfo?.basePrice || 0,
+          bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
+        );
+
+        // Use room's roomType or fall back to roomInfo's roomType
+        const roomTypeId = room.roomType || roomInfo?.roomType;
+
+        validatedRooms.push({
+          roomType: roomTypeId,
+          roomId: room.roomId,
+          checkInDate: room.checkInDate,
+          checkOutDate: room.checkOutDate,
+          adults: room.adults || 1,
+          children: room.children || 0,
+          pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || roomInfo?.basePrice || 0,
+          mealPlan: room.mealPlan || mealPlan,
+        });
+      }
+
+      totals = await calculateBookingTotals(validatedRooms, bookingType, corporateDetails);
     }
-
-
-    const totals = await calculateBookingTotals(validatedRooms, bookingType, corporateDetails);
-
 
     let status: "Pending" | "Confirmed" | "Checked-In" = "Pending";
     if (advanceAmount > 0 && advanceAmount >= totals.roomTotal * 0.1) {
@@ -641,14 +759,16 @@ export const createBooking = async (req: Request, res: Response) => {
           customerId: customer._id,
           bookingCategory,
           bookingType,
-          rooms: validatedRooms,
-          overallCheckInDate: totals.overallCheckInDate,
-          overallCheckOutDate: totals.overallCheckOutDate,
-          totalNights: totals.totalNights,
+          rooms: bookingCategory === "Day Access" ? undefined : validatedRooms,
+          overallCheckInDate: bookingCategory === "Day Access" ? req.body.visitDate : totals.overallCheckInDate,
+          overallCheckOutDate: bookingCategory === "Day Access" ? req.body.visitDate : totals.overallCheckOutDate,
+          totalNights: bookingCategory === "Day Access" ? 1 : totals.totalNights,
           totalAdults: totals.totalAdults,
           totalChildren: totals.totalChildren,
           totalGuests: totals.totalGuests,
-          totalRooms: totals.totalRooms,
+          totalRooms: bookingCategory === "Day Access" ? undefined : totals.totalRooms,
+          accessPackageId: bookingCategory === "Day Access" ? req.body.accessPackageId : undefined,
+          visitDate: bookingCategory === "Day Access" ? req.body.visitDate : undefined,
           bookingContact: {
             name: customerDetails?.name || customer?.name || "Guest",
             mobile: customerDetails?.phone || customer?.phone || "",
@@ -680,7 +800,9 @@ export const createBooking = async (req: Request, res: Response) => {
               action: "Booking Created",
               performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
               timestamp: new Date(),
-              details: `Booking created with ${validatedRooms.length} room(s)`,
+              details: bookingCategory === "Day Access" 
+                ? `Booking created for Day Access package: ${dayAccessPackage?.packageName}`
+                : `Booking created with ${validatedRooms.length} room(s)`,
             },
           ],
         },
@@ -695,12 +817,38 @@ export const createBooking = async (req: Request, res: Response) => {
         newBooking[0]._id,
         customer._id,
         validatedRooms,
-        totals.overallCheckInDate,
-        totals.overallCheckOutDate,
+        bookingCategory === "Day Access" ? req.body.visitDate : totals.overallCheckInDate,
+        bookingCategory === "Day Access" ? req.body.visitDate : totals.overallCheckOutDate,
         advanceAmount,
         paymentMode,
-        (req as any).user?._id
+        (req as any).user?._id,
+        bookingCategory,
+        bookingCategory === "Day Access" ? dayAccessPackage?._id : undefined,
+        bookingCategory === "Day Access" ? dayAccessPackage?.packageName : undefined,
+        bookingCategory === "Day Access" ? dayAccessPackage?.packageType : undefined,
+        bookingCategory === "Day Access" ? dayAccessPackage?.adult_price : undefined,
+        bookingCategory === "Day Access" ? (totals.totalAdults + totals.totalChildren) : undefined
       );
+    }
+
+    // Notification: new booking confirmed
+    if (status === "Confirmed") {
+      try {
+        const guestName = customerDetails?.name || customer?.name || "Guest";
+        const roomLabel = bookingCategory === "Day Access"
+          ? (dayAccessPackage?.packageName || "Day Access")
+          : (validatedRooms.length === 1 ? `Room ${validatedRooms[0]?.roomId}` : `${validatedRooms.length} rooms`);
+        await sendNotificationToRole(
+          "Reception",
+          "booking",
+          "Booking Confirmed",
+          `New booking confirmed: ${guestName}, ${roomLabel}. Date: ${totals.overallCheckInDate?.toLocaleDateString() || req.body.visitDate || new Date().toLocaleDateString()}.`,
+          newBooking[0]._id,
+          "Booking"
+        );
+      } catch (notifErr) {
+        console.error("Failed to send booking notification:", notifErr);
+      }
     }
 
     await session.commitTransaction();
@@ -876,7 +1024,17 @@ export const updateBooking = async (req: Request, res: Response) => {
       existingBooking.rooms = rooms;
     }
 
-    if (status) existingBooking.status = status;
+    if (status && status !== existingBooking.status) {
+      await transitionBookingState(
+        existingBooking._id,
+        status as any,
+        {
+          userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
+          notes: "Updated booking status via updateBooking"
+        },
+        { session }
+      );
+    }
     if (source) existingBooking.source = source;
     if (corporateDetails) existingBooking.corporateDetails = corporateDetails;
     if (vehicleDetails) existingBooking.vehicleDetails = vehicleDetails;
@@ -958,7 +1116,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { reason, refundAmount = 0 } = req.body;
 
-    const booking = await Booking.findById(id);
+    const booking = await Booking.findById(id).session(session);
     if (!booking) {
       return res.status(404).json({
         success: false,
@@ -980,7 +1138,15 @@ export const cancelBooking = async (req: Request, res: Response) => {
       });
     }
 
-    booking.status = "Cancelled";
+    await transitionBookingState(
+      booking._id,
+      "Cancelled",
+      {
+        userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        notes: `Cancelled. Reason: ${reason}`
+      },
+      { session }
+    );
     booking.cancellationDetails = {
       cancelledAt: new Date(),
       cancelledBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
@@ -998,14 +1164,23 @@ export const cancelBooking = async (req: Request, res: Response) => {
 
     await booking.save({ session });
 
-    const billing = await Billing.findOne({ bookingId: booking._id });
+    const billing = await Billing.findOne({ bookingId: booking._id }).session(session);
     if (billing) {
+      const operatorId = (req as any).user?._id || new mongoose.Types.ObjectId();
       if (refundAmount > 0) {
+        await recordRefund(
+          billing._id,
+          booking._id,
+          refundAmount,
+          reason || "Booking Cancelled Refund",
+          operatorId,
+          { session }
+        );
         billing.refundDetails = {
           refundAmount,
           refundMethod: "Cash",
           refundedAt: new Date(),
-          reason,
+          reason: reason || "Booking Cancelled Refund",
         };
         billing.billingStatus = "Refunded";
       } else {
@@ -1013,6 +1188,21 @@ export const cancelBooking = async (req: Request, res: Response) => {
       }
       billing.settlementStatus = "Settled";
       await billing.save({ session });
+    }
+
+    // Notification: booking cancelled
+    try {
+      const guestName = booking.bookingContact?.name || "Guest";
+      await sendNotificationToRole(
+        "Manager",
+        "booking",
+        "Booking Cancelled",
+        `Booking cancelled by staff: ${guestName}. Reason: ${reason || "No reason provided"}. Refund: ₹${refundAmount || 0}.`,
+        booking._id,
+        "Booking"
+      );
+    } catch (notifErr) {
+      console.error("Failed to send cancellation notification:", notifErr);
     }
 
     await session.commitTransaction();
