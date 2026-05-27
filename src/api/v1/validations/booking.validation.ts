@@ -5,10 +5,17 @@ const objectIdSchema = z.string().regex(objectIdRegex, { message: "Invalid Objec
 
 export const createBookingSchema = z.object({
   body: z.object({
-    customerId: objectIdSchema,
+    // Support both legacy (customerId + bookingContact) and new (customerDetails) formats
+    customerId: objectIdSchema.optional(),
+    customerDetails: z.object({
+      name: z.string().min(1, "Customer name is required"),
+      phone: z.string().min(10, "Phone must be at least 10 digits"),
+      email: z.string().email().optional(),
+      address: z.string().optional(),
+    }).optional(),
     bookingCategory: z.enum(["Room Stay", "Day Access", "Event", "Banquet"]).default("Room Stay"),
     bookingType: z.enum(["Individual", "Corporate"]).default("Individual"),
-    
+
     rooms: z.array(
       z.object({
         roomType: objectIdSchema,
@@ -26,7 +33,7 @@ export const createBookingSchema = z.object({
 
     overallCheckInDate: z.coerce.date().optional(),
     overallCheckOutDate: z.coerce.date().optional(),
-    
+
     accessPackageId: objectIdSchema.optional(),
     visitDate: z.coerce.date().optional(),
 
@@ -61,17 +68,36 @@ export const createBookingSchema = z.object({
 
     mealPlan: z.enum(["EP", "CP", "MAP", "AP"]).optional(),
     advanceAmount: z.number().min(0).default(0),
-    
+
+    // Legacy format support — bookingContact is optional, controller derives from customerDetails
     bookingContact: z.object({
       name: z.string().min(1, "Contact name is required"),
       mobile: z.string().min(10, "Contact mobile must be at least 10 digits"),
       email: z.string().email().optional(),
-    }),
+    }).optional(),
+
+    // Support adults/children at top level (inline with frontend's payload)
+    adults: z.number().min(0).default(0),
+    children: z.number().min(0).default(0),
+
+    // Support paymentMode alias (frontend sends paymentMode)
+    paymentMode: z.string().optional(),
 
     expiresAt: z.coerce.date().optional(),
     pickupRequired: z.boolean().default(false),
     specialRequests: z.string().max(500).optional(),
-  }),
+    internalNotes: z.string().optional(),
+    vehicleDetails: z.array(z.any()).default([]),
+  }).refine(
+    (data) => {
+      // Must have either customerId or customerDetails
+      return data.customerId || data.customerDetails;
+    },
+    {
+      message: "Either customerId or customerDetails must be provided",
+      path: ["customerDetails"],
+    }
+  ),
 });
 
 export const updateBookingSchema = z.object({
