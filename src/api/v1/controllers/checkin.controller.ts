@@ -1450,7 +1450,7 @@ export const roomChange = async (req: Request, res: Response) => {
         nights: 0,
         ratePerNight: newRoom.basePrice || 0,
         totalRoomCharge: 0,
-        stayType: "Room Change" as const,
+        stayType: "Transferred" as const,
       };
 
       billing.roomChargesBreakdown = [closingEntry, newRoomEntry];
