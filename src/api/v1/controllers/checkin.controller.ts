@@ -1313,3 +1313,156 @@ export const getStayOverview = async (req: Request, res: Response) => {
     });
   }
 };
+
+// ============================================================
+// ROOM CHANGE
+// ============================================================
+export const roomChange = async (req: Request, res: Response) => {
+  const mongoSession = await mongoose.startSession();
+  mongoSession.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const { newRoomId, newRoomType, effectiveDate } = req.body;
+
+    const checkIn = await CheckIn.findById(id).session(mongoSession);
+    if (!checkIn) {
+      await mongoSession.abortTransaction();
+      return res.status(404).json({ success: false, message: "Check-in not found" });
+    }
+
+    const currentRoomDetail = checkIn.roomDetails?.[0];
+    if (!currentRoomDetail) {
+      await mongoSession.abortTransaction();
+      return res.status(400).json({ success: false, message: "No room details found" });
+    }
+
+    const bookingStart = new Date(checkIn.checkInTime);
+    const bookingEnd = new Date(checkIn.expectedCheckOutTime);
+
+    const conflict = await CheckIn.findOne({
+      _id: { $ne: checkIn._id },
+      status: "Active",
+      "roomDetails.roomId": new mongoose.Types.ObjectId(newRoomId),
+      $or: [
+        {
+          checkInTime: { $lt: bookingEnd },
+          expectedCheckOutTime: { $gt: bookingStart },
+        },
+      ],
+    }).session(mongoSession);
+
+    if (conflict) {
+      await mongoSession.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "Room is not available for the booking period",
+      });
+    }
+
+    const bookingConflict = await Booking.findOne({
+      status: { $in: ["Pending", "Confirmed", "Checked-In"] },
+      "rooms.roomId": new mongoose.Types.ObjectId(newRoomId),
+      $or: [
+        {
+          "rooms.checkInDate": { $lt: bookingEnd },
+          "rooms.checkOutDate": { $gt: bookingStart },
+        },
+      ],
+    }).session(mongoSession);
+
+    if (bookingConflict) {
+      await mongoSession.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "Room is not available for the booking period",
+      });
+    }
+
+    const newRoom = await Room.findById(newRoomId).session(mongoSession);
+    if (!newRoom) {
+      await mongoSession.abortTransaction();
+      return res.status(404).json({ success: false, message: "Room not found" });
+    }
+
+    const roomTypeId = newRoomType
+      ? new mongoose.Types.ObjectId(newRoomType)
+      : (newRoom.roomType as mongoose.Types.ObjectId);
+
+    const nights = Math.max(
+      1,
+      Math.ceil(
+        (bookingEnd.getTime() - bookingStart.getTime()) / (1000 * 60 * 60 * 24)
+      )
+    );
+
+    checkIn.roomDetails = [
+      {
+        roomId: new mongoose.Types.ObjectId(newRoomId),
+        roomType: roomTypeId,
+        roomNumber: newRoom.roomNumber,
+        originalPrice: newRoom.basePrice || 0,
+        appliedPrice: newRoom.basePrice || 0,
+        assignedAt: new Date(),
+      },
+    ];
+
+    checkIn.activityLogs.push({
+      action: "Room Changed",
+      performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+      timestamp: new Date(),
+      details: `Room changed from ${currentRoomDetail.roomNumber} to ${newRoom.roomNumber} (${currentRoomDetail.appliedPrice} → ${newRoom.basePrice})`,
+    });
+
+    await checkIn.save({ session: mongoSession });
+
+    const billing = await Billing.findOne({ checkInId: checkIn._id }).session(mongoSession);
+    if (billing) {
+      const roomChargesBreakdown = [
+        {
+          roomId: new mongoose.Types.ObjectId(newRoomId),
+          roomNumber: newRoom.roomNumber,
+          checkInDate: bookingStart,
+          checkOutDate: bookingEnd,
+          nights,
+          ratePerNight: newRoom.basePrice || 0,
+          totalRoomCharge: nights * (newRoom.basePrice || 0),
+          stayType: "Room Change" as const,
+        },
+      ];
+
+      billing.roomChargesBreakdown = roomChargesBreakdown;
+      billing.totalRoomCharges = roomChargesBreakdown.reduce(
+        (sum: number, r: any) => sum + r.totalRoomCharge,
+        0
+      );
+      billing.subTotal = billing.totalRoomCharges + (billing.totalFacilityCharges || 0);
+      billing.grandTotal = billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
+      billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
+
+      billing.activityLogs.push({
+        action: "Billing Updated on Room Change",
+        performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        timestamp: new Date(),
+        details: `Room changed: billing recalculated at ₹${newRoom.basePrice}/night`,
+      });
+
+      await billing.save({ session: mongoSession });
+    }
+
+    await mongoSession.commitTransaction();
+    mongoSession.endSession();
+
+    return res.status(200).json({
+      success: true,
+      message: "Room changed successfully",
+      data: checkIn,
+    });
+
+  } catch (error: any) {
+    await mongoSession.abortTransaction();
+    mongoSession.endSession();
+    console.error("roomChange error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
