@@ -1328,12 +1328,14 @@ export const roomChange = async (req: Request, res: Response) => {
     const checkIn = await CheckIn.findById(id).session(mongoSession);
     if (!checkIn) {
       await mongoSession.abortTransaction();
+      mongoSession.endSession();
       return res.status(404).json({ success: false, message: "Check-in not found" });
     }
 
     const currentRoomDetail = checkIn.roomDetails?.[0];
     if (!currentRoomDetail) {
       await mongoSession.abortTransaction();
+      mongoSession.endSession();
       return res.status(400).json({ success: false, message: "No room details found" });
     }
 
@@ -1354,6 +1356,7 @@ export const roomChange = async (req: Request, res: Response) => {
 
     if (conflict) {
       await mongoSession.abortTransaction();
+      mongoSession.endSession();
       return res.status(400).json({
         success: false,
         message: "Room is not available for the booking period",
@@ -1373,6 +1376,7 @@ export const roomChange = async (req: Request, res: Response) => {
 
     if (bookingConflict) {
       await mongoSession.abortTransaction();
+      mongoSession.endSession();
       return res.status(400).json({
         success: false,
         message: "Room is not available for the booking period",
@@ -1382,6 +1386,7 @@ export const roomChange = async (req: Request, res: Response) => {
     const newRoom = await Room.findById(newRoomId).session(mongoSession);
     if (!newRoom) {
       await mongoSession.abortTransaction();
+      mongoSession.endSession();
       return res.status(404).json({ success: false, message: "Room not found" });
     }
 
@@ -1391,9 +1396,7 @@ export const roomChange = async (req: Request, res: Response) => {
 
     const nights = Math.max(
       1,
-      Math.ceil(
-        (bookingEnd.getTime() - bookingStart.getTime()) / (1000 * 60 * 60 * 24)
-      )
+      differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart))
     );
 
     checkIn.roomDetails = [
@@ -1418,21 +1421,40 @@ export const roomChange = async (req: Request, res: Response) => {
 
     const billing = await Billing.findOne({ checkInId: checkIn._id }).session(mongoSession);
     if (billing) {
-      const roomChargesBreakdown = [
-        {
-          roomId: new mongoose.Types.ObjectId(newRoomId),
-          roomNumber: newRoom.roomNumber,
-          checkInDate: bookingStart,
-          checkOutDate: bookingEnd,
-          nights,
-          ratePerNight: newRoom.basePrice || 0,
-          totalRoomCharge: nights * (newRoom.basePrice || 0),
-          stayType: "Room Change" as const,
-        },
-      ];
+      const oldRoomNights = Math.max(
+        1,
+        differenceInDays(
+          startOfDay(effectiveDate ? new Date(effectiveDate) : bookingStart),
+          startOfDay(bookingStart)
+        )
+      );
 
-      billing.roomChargesBreakdown = roomChargesBreakdown;
-      billing.totalRoomCharges = roomChargesBreakdown.reduce(
+      // Closing entry for old room (prepend — audit trail preserved)
+      const closingEntry = {
+        roomId: currentRoomDetail.roomId,
+        roomNumber: currentRoomDetail.roomNumber,
+        checkInDate: bookingStart,
+        checkOutDate: effectiveDate ? new Date(effectiveDate) : bookingStart,
+        nights: oldRoomNights,
+        ratePerNight: currentRoomDetail.appliedPrice || 0,
+        totalRoomCharge: oldRoomNights * (currentRoomDetail.appliedPrice || 0),
+        stayType: "Original" as const,
+      };
+
+      // New room entry appended
+      const newRoomEntry = {
+        roomId: new mongoose.Types.ObjectId(newRoomId),
+        roomNumber: newRoom.roomNumber,
+        checkInDate: effectiveDate ? new Date(effectiveDate) : bookingStart,
+        checkOutDate: bookingEnd,
+        nights: 0,
+        ratePerNight: newRoom.basePrice || 0,
+        totalRoomCharge: 0,
+        stayType: "Room Change" as const,
+      };
+
+      billing.roomChargesBreakdown = [closingEntry, newRoomEntry];
+      billing.totalRoomCharges = billing.roomChargesBreakdown.reduce(
         (sum: number, r: any) => sum + r.totalRoomCharge,
         0
       );
