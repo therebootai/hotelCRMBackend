@@ -25,7 +25,7 @@ export const getOccupancyReport = async (startDate: Date, endDate: Date): Promis
   const totalRoomsCount = rooms.length || 1;
 
   const checkins = await CheckIn.find({
-    status: "Checked-In",
+    status: "Active",
     checkInTime: { $lte: endOfDay(endDate) },
     expectedCheckOutTime: { $gte: startOfDay(startDate) }
   }).lean();
@@ -33,13 +33,14 @@ export const getOccupancyReport = async (startDate: Date, endDate: Date): Promis
   const days = eachDayOfInterval({ start: startOfDay(startDate), end: endOfDay(endDate) });
 
   return days.map(day => {
-    const occupiedCount = checkins.filter((c: any) => {
+    const occupiedCount = checkins.reduce((sum: number, c: any) => {
       const cIn = new Date(c.checkInTime);
       const cOut = new Date(c.expectedCheckOutTime);
       const dayStart = startOfDay(day);
       const dayEnd = endOfDay(day);
-      return cIn <= dayEnd && cOut >= dayStart;
-    }).length;
+      const overlapsDay = cIn <= dayEnd && cOut >= dayStart;
+      return overlapsDay ? sum + (c.roomDetails?.length || 0) : sum;
+    }, 0);
 
     const rate = parseFloat(((occupiedCount / totalRoomsCount) * 100).toFixed(2));
 

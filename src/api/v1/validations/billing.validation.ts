@@ -107,6 +107,21 @@ export const getBillingListSchema = z.object({
   }),
 });
 
+// For GET /api/v1/billing/:id/invoice-pdf
+export const exportSingleBillingPdfSchema = z.object({
+  params: z.object({
+    id: objectIdSchema,
+  }),
+});
+
+// For GET /api/v1/billing/export-pdf
+export const exportBillingPdfSchema = z.object({
+  query: z.object({
+    startDate: z.string().min(1, "startDate is required"),
+    endDate: z.string().min(1, "endDate is required"),
+  }),
+});
+
 // For POST /api/v1/billing/:id/reverse — requires REVERSE_BILLING permission
 export const reverseBillingSchema = z.object({
   params: z.object({

@@ -12,6 +12,7 @@ type UploadedFile = fileUpload.UploadedFile;
 type UploadedFiles = { [key: string]: UploadedFile | UploadedFile[] };
 import { sendNotificationToRole } from "../services/notification.service";
 import DayAccessPackage from "../models/accessPackage.model";
+import { TaxGst } from "../models/taxGst.model";
 
 
 export const processCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
@@ -205,8 +206,11 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     if (!isDayAccess) {
       for (const sel of selections) {
-        const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
         const roomId = sel.roomId || sel._id;
+        if (!roomId) {
+          throw new Error("All room slots must be assigned before check-in");
+        }
+        const roomInfo = await Room.findById(roomId).session(mongoSession);
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
@@ -234,6 +238,59 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         });
         roomIds.push(roomId);
       }
+    }
+
+    // Recalculate actual pricing from assigned rooms (Room Stay only)
+    if (!isDayAccess && roomDetails.length > 0) {
+      const actualRoomTotal = roomDetails.reduce(
+        (sum: number, r: any) => sum + (r.appliedPrice || 0) * nights,
+        0,
+      );
+
+      // Resolve tax percentage
+      let taxPct = 12;
+      if (booking.taxGstId) {
+        try {
+          const taxDoc = await TaxGst.findById(booking.taxGstId).session(mongoSession).lean() as any;
+          if (taxDoc?.percentage) {
+            taxPct = taxDoc.percentage;
+          }
+        } catch (_) { /* use default 12% */ }
+      } else if ((booking.pricingSummary as any)?.taxPercentage) {
+        taxPct = (booking.pricingSummary as any).taxPercentage;
+      }
+
+      const addonTotal = (booking.addons || []).reduce(
+        (s: number, a: any) => s + (Number(a.total) || 0),
+        0,
+      );
+      const actualTaxAmount = Math.round(actualRoomTotal * taxPct / 100);
+      const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
+      const paidSoFar = (booking.pricingSummary as any)?.paidAmount || 0;
+
+      await Booking.updateOne(
+        { _id: booking._id },
+        {
+          $set: {
+            "pricingSummary.roomTotal": actualRoomTotal,
+            "pricingSummary.taxAmount": actualTaxAmount,
+            "pricingSummary.taxPercentage": taxPct,
+            "pricingSummary.grandTotal": actualGrandTotal,
+            "pricingSummary.dueAmount": Math.max(0, actualGrandTotal - paidSoFar),
+          },
+        },
+        { session: mongoSession },
+      );
+
+      // Update local reference so paymentSummary below uses real values
+      (booking.pricingSummary as any) = {
+        ...(booking.pricingSummary as any),
+        roomTotal: actualRoomTotal,
+        taxAmount: actualTaxAmount,
+        taxPercentage: taxPct,
+        grandTotal: actualGrandTotal,
+        dueAmount: Math.max(0, actualGrandTotal - paidSoFar),
+      };
     }
 
     const grcDetails = generateGRC ? [{
@@ -281,6 +338,12 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       })),
       grcDetails,
       vehicleDetails: parsedVehicles,
+      addons: (booking.addons || []).map((a: any) => ({
+        name: a.serviceName,
+        quantity: a.quantity,
+        rate: a.rate,
+        total: a.total,
+      })),
       notes: notes || "",
       specialRequests: specialRequests || "",
       liabilityAccepted: true,
@@ -313,6 +376,27 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     booking.status = isDayAccess ? "Checked-In" : (totalCheckedRooms >= totalBookedRooms ? "Checked-In" : booking.status);
     await booking.save({ session: mongoSession });
+
+    // Update booking's paidAmount and dueAmount to include check-in payment
+    if (parsedTotalAdvance > 0) {
+      const bookingPaidBefore = (booking.pricingSummary as any)?.paidAmount || 0;
+      const totalPaidNow = bookingPaidBefore + parsedTotalAdvance;
+      const grandTotal = (booking.pricingSummary as any)?.grandTotal || 0;
+      const newDue = Math.max(0, grandTotal - totalPaidNow);
+      const newPaymentStatus = grandTotal > 0 && totalPaidNow >= grandTotal ? "Paid" : "Partial";
+
+      await Booking.updateOne(
+        { _id: booking._id },
+        {
+          $set: {
+            "pricingSummary.paidAmount": totalPaidNow,
+            "pricingSummary.dueAmount": newDue,
+            paymentStatus: newPaymentStatus,
+          },
+        },
+        { session: mongoSession },
+      );
+    }
 
     // Build room charges: for Room Stay use per-night, for Day Access use flat add-on price
     let roomChargesBreakdown: any[];
@@ -354,6 +438,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       );
     }
 
+    const bookingAddonTotal = (booking.addons || []).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
+
     let billing = await Billing.findOne({ bookingId: booking._id }).session(mongoSession);
 
 
@@ -377,11 +463,17 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         } : undefined,
         roomChargesBreakdown,
         totalRoomCharges,
-        extraServices: [],
+        extraServices: (booking.addons || []).map((a: any) => ({
+          serviceName: a.serviceName,
+          quantity: a.quantity,
+          rate: a.rate,
+          total: a.total,
+          date: new Date(),
+        })),
         facilityCharges: [],
         packageCharges: [],
         otherCharges: 0,
-        subTotal: totalRoomCharges,
+        subTotal: totalRoomCharges + bookingAddonTotal,
         taxBreakdown: {
           cgst: (booking.pricingSummary?.taxAmount || 0) / 2,
           sgst: (booking.pricingSummary?.taxAmount || 0) / 2,
@@ -390,9 +482,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           totalTax: booking.pricingSummary?.taxAmount || 0,
         },
         discount: 0,
-        grandTotal: totalRoomCharges + (booking.pricingSummary?.taxAmount || 0),
+        grandTotal: totalRoomCharges + bookingAddonTotal + (booking.pricingSummary?.taxAmount || 0),
         paidAmount: parsedTotalAdvance,
-        dueAmount: (totalRoomCharges + (booking.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
+        dueAmount: (totalRoomCharges + bookingAddonTotal + (booking.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
         paymentStatus: parsedTotalAdvance > 0 ? "Partial" : "Unpaid",
         paymentModeSummary: {
           cash: parsedPayments.filter((p: any) => p.paymentMode === "Cash").reduce((s: number, p: any) => s + Number(p.amount), 0),
@@ -1290,6 +1382,10 @@ export const getStayOverview = async (req: Request, res: Response) => {
             end: ci.expectedCheckOutTime,
             color: "red",
             status: ci.status,
+            price: rd.appliedPrice || 0,
+            roomNumber: rd.roomNumber || (rd.roomId as any)?.roomNumber || "",
+            roomType: (rd.roomType as any)?._id?.toString() || rd.roomType?.toString() || "",
+            totalAdvanceAmount: ci.totalAdvanceAmount || 0,
           });
         }
       }

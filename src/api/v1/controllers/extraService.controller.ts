@@ -16,14 +16,14 @@ export const createExtraService = async (
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { name, isActive } = req.body;
+    const { name, price, isActive } = req.body;
 
     const existingService = await ExtraService.findOne({ name }).session(session);
     if (existingService) {
       throw new Error("An Extra Service with this name already exists");
     }
 
-    const newService = new ExtraService({ name, isActive });
+    const newService = new ExtraService({ name, price, isActive });
     await newService.save({ session });
 
     await session.commitTransaction();

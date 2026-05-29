@@ -28,6 +28,14 @@ export interface ICancellationDetails {
   refundAmount: number;
 }
 
+export interface IBookingAddon {
+  serviceId: mongoose.Types.ObjectId;
+  serviceName: string;
+  quantity: number;
+  rate: number;
+  total: number;
+}
+
 // ==========================================
 // BOOKING MODEL INTERFACE
 // ==========================================
@@ -49,6 +57,7 @@ export interface IPricingSummary {
   roomTotal: number;
   discountAmount: number;
   taxAmount: number;
+  taxPercentage: number;
   grandTotal: number;
   paidAmount: number;
   dueAmount: number;
@@ -140,6 +149,9 @@ export interface IBooking extends Document {
   // Pricing Summary
   pricingSummary: IPricingSummary;
 
+  // Tax/GST Reference (from tax-gst master selected at booking creation)
+  taxGstId?: mongoose.Types.ObjectId;
+
   // Cancellation Details
   cancellationDetails?: ICancellationDetails;
 
@@ -149,6 +161,9 @@ export interface IBooking extends Document {
 
   // Vehicle Details (Multiple)
   vehicleDetails: IVehicleDetail[];
+
+  // Addons
+  addons: IBookingAddon[];
 
   // Room Preferences
   preferences?: {
@@ -311,9 +326,16 @@ const BookingSchema = new Schema<IBooking>(
       roomTotal: { type: Number, default: 0 },
       discountAmount: { type: Number, default: 0 },
       taxAmount: { type: Number, default: 0 },
+      taxPercentage: { type: Number, default: 0 },
       grandTotal: { type: Number, default: 0 },
       paidAmount: { type: Number, default: 0 },
       dueAmount: { type: Number, default: 0 },
+    },
+
+    // Tax/GST Reference (from tax-gst master selected at booking creation)
+    taxGstId: {
+      type: Schema.Types.ObjectId,
+      ref: "TaxGst",
     },
 
     // Cancellation Details
@@ -335,6 +357,17 @@ const BookingSchema = new Schema<IBooking>(
         vehicleType: { type: String },
         driverName: { type: String },
         driverContact: { type: String },
+      },
+    ],
+
+    // Addons
+    addons: [
+      {
+        serviceId: { type: Schema.Types.ObjectId, ref: "ExtraService" },
+        serviceName: { type: String, required: true },
+        quantity: { type: Number, default: 1 },
+        rate: { type: Number, required: true },
+        total: { type: Number, required: true },
       },
     ],
 

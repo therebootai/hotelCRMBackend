@@ -40,9 +40,11 @@ export const processCheckout = async (req: Request, res: Response) => {
     }
 
     const checkInDate = new Date(checkInData.checkInTime);
-    const checkOutDate = isCheckout ? new Date() : new Date(checkInData.expectedCheckOutTime);
+    // Use expectedCheckOutTime for billing calculations to avoid recalculation based on actual stay duration
+    const billingCheckOutDate = new Date(checkInData.expectedCheckOutTime);
+    const actualCheckOutDate = isCheckout ? new Date() : billingCheckOutDate;
 
-    let nights = differenceInDays(startOfDay(checkOutDate), startOfDay(checkInDate));
+    let nights = differenceInDays(startOfDay(billingCheckOutDate), startOfDay(checkInDate));
     if (nights <= 0) nights = 1;
 
     const roomChargesBreakdown = checkInData.roomDetails.map((room: any) => {
@@ -53,7 +55,7 @@ export const processCheckout = async (req: Request, res: Response) => {
         roomNumber: room.roomNumber,
         roomType: room.roomType?.name || "Standard",
         checkInDate: checkInData.checkInTime,
-        checkOutDate: checkOutDate,
+        checkOutDate: billingCheckOutDate,
         nights,
         ratePerNight: rate,
         totalRoomCharge: totalCharge,
@@ -171,10 +173,15 @@ export const processCheckout = async (req: Request, res: Response) => {
     await bill.save({ session });
 
     if (isCheckout || isNewBill) {
-      const customer = await Customer.findById(bill.customerId).session(session);
-      const customerName = customer ? customer.name : "Guest";
-      const customerGSTNumber = customer ? customer.companyGST : undefined;
-      await recordGstEntry(bill, customerName, customerGSTNumber, { session });
+      const { GstLedger } = await import("../models/gstLedger.model");
+      const existingGstEntry = await GstLedger.findOne({ billingId: bill._id }).session(session);
+
+      if (!existingGstEntry) {
+        const customer = await Customer.findById(bill.customerId).session(session);
+        const customerName = customer ? customer.name : "Guest";
+        const customerGSTNumber = customer ? customer.companyGST : undefined;
+        await recordGstEntry(bill, customerName, customerGSTNumber, { session });
+      }
     }
 
     if (!isCheckout) {
@@ -332,7 +339,7 @@ export const getBillPreview = async (req: Request, res: Response) => {
   try {
     const { checkInId } = req.params;
 
-    const checkInData = await CheckIn.findById(checkInId).populate("bookingId");
+    const checkInData = await CheckIn.findById(checkInId).populate("bookingId", "name percentage type pricingSummary taxGstId");
 
     if (!checkInData) {
       return res.status(404).json({
@@ -373,7 +380,8 @@ export const getBillPreview = async (req: Request, res: Response) => {
         notes: billing.notes,
 
         isUpdated: true,
-        primaryGuest: primaryGuest ? { name: primaryGuest.name, mobileNo: primaryGuest.mobileNo } : null
+        primaryGuest: primaryGuest ? { name: primaryGuest.name, mobileNo: primaryGuest.mobileNo } : null,
+        taxGstId: (checkInData.bookingId as any)?.taxGstId || null
       };
 
       return res.status(200).json({
@@ -386,6 +394,7 @@ export const getBillPreview = async (req: Request, res: Response) => {
     // 🆕 No existing bill → fresh preview
     // Default tax from booking's stored taxPercentage
     const storedTaxPercent = (checkInData.bookingId as any)?.pricingSummary?.taxPercentage || 12;
+    const storedTaxGstId = (checkInData.bookingId as any)?.taxGstId || null;
 
     const previewData = {
       roomChargesBreakdown: recalculatedRooms,
@@ -397,7 +406,8 @@ export const getBillPreview = async (req: Request, res: Response) => {
       payments: [],
       paidAmount: 0,
       primaryGuest: primaryGuest ? { name: primaryGuest.name, mobileNo: primaryGuest.mobileNo } : null,
-      taxPercentage: storedTaxPercent
+      taxPercentage: storedTaxPercent,
+      taxGstId: storedTaxGstId
     };
 
     res.status(200).json({

@@ -154,6 +154,7 @@ export interface IBilling extends Document {
   subTotal: number;
 
   taxBreakdown: ITaxBreakdown;
+  taxPercentage: number;
   discount: number;
   discountReason?: string;
   advanceDeducted: number;
@@ -336,6 +337,12 @@ const BillingSchema = new Schema<IBilling>(
       serviceCharge: { type: Number, default: 0 },
       cess: { type: Number, default: 0 },
       totalTax: { type: Number, default: 0 },
+    },
+
+    // Tax Percentage (source of truth from tax-gst master)
+    taxPercentage: {
+      type: Number,
+      default: 0,
     },
 
     // Discount

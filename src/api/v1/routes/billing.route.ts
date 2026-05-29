@@ -4,6 +4,8 @@ import {
   processCheckout,
   getBillingList,
   reverseBilling,
+  exportBillingPdf,
+  exportSingleBillingPdf,
 } from "../controllers/billing.controller";
 import { validateRequest } from "@/api/v1/middlewares/validateRequest.middleware";
 import { protect } from "@/api/v1/middlewares/auth.middleware";
@@ -13,6 +15,8 @@ import {
   getBillingListSchema,
   getBillPreviewSchema,
   reverseBillingSchema,
+  exportBillingPdfSchema,
+  exportSingleBillingPdfSchema,
 } from "@/api/v1/validations/billing.validation";
 
 const router = express.Router();
@@ -24,7 +28,11 @@ router.post("/process-checkout", validateRequest(processCheckoutSchema), require
 
 router.get("/list", validateRequest(getBillingListSchema), requirePermission(["PROCESS_CHECKOUT", "VIEW_REPORTS"]), getBillingList);
 
+router.get("/export-pdf", validateRequest(exportBillingPdfSchema), requirePermission(["PROCESS_CHECKOUT", "VIEW_REPORTS"]), exportBillingPdf);
+
 router.get("/preview/:checkInId", validateRequest(getBillPreviewSchema), requirePermission(["PROCESS_CHECKOUT", "VIEW_REPORTS"]), getBillPreview);
+
+router.get("/:id/invoice-pdf", validateRequest(exportSingleBillingPdfSchema), requirePermission(["PROCESS_CHECKOUT", "VIEW_REPORTS"]), exportSingleBillingPdf);
 
 router.post("/:id/reverse", protect, requirePermission("REVERSE_BILLING"), reverseBilling);
 
