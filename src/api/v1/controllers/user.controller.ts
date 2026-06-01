@@ -242,7 +242,7 @@ export const login = async (
       { id: user._id, role: user.role },
       env.TOKEN_SECRET,
       {
-        expiresIn: "1d",
+        expiresIn: "7d",
       },
     );
 
