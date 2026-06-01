@@ -11,14 +11,13 @@ import env from "@/config/env";
 // HELPER: AUTHORIZE USER ACTIONS
 // ==========================================
 const authorizeAndGetTargetUser = async (
-  currentUser: any, 
-  targetId: string, 
+  currentUser: any,
+  targetId: string,
   session: mongoose.ClientSession,
-  actionName: string
+  actionName: string,
 ) => {
   if (!currentUser) throw new Error("Not authenticated");
 
-  
   if (currentUser._id.toString() === targetId) {
     throw new Error(`You cannot ${actionName} your own account`);
   }
@@ -27,7 +26,9 @@ const authorizeAndGetTargetUser = async (
   if (!targetUser) throw new Error("User not found");
 
   if (currentUser.role !== "admin" && targetUser.role === "admin") {
-    const err = new Error(`Unauthorized: Non-admins cannot ${actionName} admin accounts`);
+    const err = new Error(
+      `Unauthorized: Non-admins cannot ${actionName} admin accounts`,
+    );
     err.name = "ForbiddenError";
     throw err;
   }
@@ -167,7 +168,12 @@ export const toggleStatus = async (
     const { id } = req.params;
     const singleId: string = Array.isArray(id) ? id[0] : id;
 
-    const targetUser = await authorizeAndGetTargetUser(req.user, singleId, session, "change the active status of");
+    const targetUser = await authorizeAndGetTargetUser(
+      req.user,
+      singleId,
+      session,
+      "change the active status of",
+    );
 
     targetUser.isActive = !targetUser.isActive;
     await targetUser.save({ session });
@@ -178,7 +184,8 @@ export const toggleStatus = async (
     });
   } catch (error) {
     await session.abortTransaction();
-    const statusCode = error instanceof Error && error.name === "ForbiddenError" ? 403 : 400;
+    const statusCode =
+      error instanceof Error && error.name === "ForbiddenError" ? 403 : 400;
     return httpError(next, error, req, statusCode);
   } finally {
     session.endSession();
@@ -249,7 +256,7 @@ export const login = async (
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
@@ -302,7 +309,6 @@ export const me = async (
   }
 };
 
-
 // ==========================================
 // DELETE USER
 // ==========================================
@@ -317,7 +323,7 @@ export const deleteUser = async (
     const { id } = req.params;
 
     const singleId: string = Array.isArray(id) ? id[0] : id;
-    
+
     await authorizeAndGetTargetUser(req.user, singleId, session, "delete");
 
     // 2. If it passes, execute the deletion
@@ -327,7 +333,8 @@ export const deleteUser = async (
     return httpResponse(req, res, 200, "User deleted successfully");
   } catch (error) {
     await session.abortTransaction();
-    const statusCode = error instanceof Error && error.name === "ForbiddenError" ? 403 : 400;
+    const statusCode =
+      error instanceof Error && error.name === "ForbiddenError" ? 403 : 400;
     return httpError(next, error, req, statusCode);
   } finally {
     session.endSession();
