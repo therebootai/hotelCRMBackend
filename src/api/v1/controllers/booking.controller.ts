@@ -1109,12 +1109,17 @@ export const updateBooking = async (req: Request, res: Response) => {
     const { id } = req.params;
     const {
       rooms,
+      roomTypesData,
+      addons,
+      accessPackageId,
+      visitDate,
       advanceAmount,
       paymentMode,
       source,
       status,
       corporateDetails,
       vehicleDetails,
+      travelAgentInfo,
       preferences,
       internalNotes,
       specialRequests,
@@ -1128,26 +1133,134 @@ export const updateBooking = async (req: Request, res: Response) => {
       });
     }
 
-    // Update fields
-    if (rooms) {
-      // Validate new room availability
-      for (const room of rooms) {
-        const availability = await checkRoomAvailability(
-          room.roomId,
-          new Date(room.checkInDate),
-          new Date(room.checkOutDate),
-          existingBooking._id // Exclude current booking
-        );
+    let updatedRooms: IBookedRoom[] | undefined = undefined;
+    let totals: any = null;
 
-        if (!availability.isAvailable) {
-          await session.abortTransaction();
-          return res.status(400).json({
-            success: false,
-            message: `Room ${room.roomId} is not available: ${availability.reason}`,
+    if (existingBooking.bookingCategory === "Day Access") {
+      if (accessPackageId) existingBooking.accessPackageId = accessPackageId;
+      if (visitDate) existingBooking.visitDate = new Date(visitDate);
+      
+      const pkg = await DayAccessPackage.findById(existingBooking.accessPackageId);
+      const pkgPrice = pkg?.adult_price || 0;
+      totals = await calculateBookingTotals(
+        [],
+        existingBooking.bookingType,
+        corporateDetails || existingBooking.corporateDetails,
+        "Day Access",
+        pkgPrice,
+        existingBooking.totalAdults,
+        existingBooking.totalChildren
+      );
+    } else {
+      if (rooms && rooms.length > 0) {
+        // Specific rooms assigned
+        const validatedRooms: IBookedRoom[] = [];
+        for (const room of rooms) {
+          const availability = await checkRoomAvailability(
+            room.roomId,
+            new Date(room.checkInDate),
+            new Date(room.checkOutDate),
+            existingBooking._id
+          );
+
+          if (!availability.isAvailable) {
+            await session.abortTransaction();
+            return res.status(400).json({
+              success: false,
+              message: `Room ${room.roomId} is not available: ${availability.reason}`,
+            });
+          }
+          
+          const roomInfo = await Room.findById(room.roomId);
+          const pricing = await calculateDateWisePricing(
+            room.roomId,
+            new Date(room.checkInDate),
+            new Date(room.checkOutDate),
+            roomInfo?.basePrice || 0,
+            existingBooking.bookingType === "Corporate" ? corporateDetails?.negotiatedRate || existingBooking.corporateDetails?.negotiatedRate : undefined
+          );
+
+          validatedRooms.push({
+            roomType: room.roomType || roomInfo?.roomType,
+            roomId: room.roomId,
+            checkInDate: room.checkInDate,
+            checkOutDate: room.checkOutDate,
+            adults: room.adults || 1,
+            children: room.children || 0,
+            pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || roomInfo?.basePrice || 0,
+            mealPlan: room.mealPlan || existingBooking.mealPlan,
           });
         }
+        updatedRooms = validatedRooms;
+        totals = await calculateBookingTotals(validatedRooms, existingBooking.bookingType, corporateDetails || existingBooking.corporateDetails);
+      } else if (roomTypesData && roomTypesData.length > 0) {
+        // General room types without specific assignment
+        const validatedRooms: IBookedRoom[] = [];
+        let overallCheckIn: Date | null = null;
+        let overallCheckOut: Date | null = null;
+        let roomTotal = 0;
+        let totalAdultsCount = 0;
+        let totalChildrenCount = 0;
+        let totalRoomsCount = 0;
+
+        for (const entry of roomTypesData) {
+          const countNum = Number(entry.count) || 1;
+          const entryNights = differenceInDays(new Date(entry.checkOutDate), new Date(entry.checkInDate)) || 1;
+          const pricePerNight = Number(entry.basePrice) || 0;
+          const checkInDt = new Date(entry.checkInDate);
+          const checkOutDt = new Date(entry.checkOutDate);
+
+          if (!overallCheckIn || checkInDt < overallCheckIn) overallCheckIn = checkInDt;
+          if (!overallCheckOut || checkOutDt > overallCheckOut) overallCheckOut = checkOutDt;
+
+          for (let i = 0; i < countNum; i++) {
+            validatedRooms.push({
+              roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
+              checkInDate: checkInDt,
+              checkOutDate: checkOutDt,
+              adults: Number(entry.adults) || 1,
+              children: Number(entry.children) || 0,
+              pricePerNight,
+              mealPlan: existingBooking.mealPlan,
+            });
+          }
+
+          roomTotal += pricePerNight * countNum * entryNights;
+          totalAdultsCount += (Number(entry.adults) || 1) * countNum;
+          totalChildrenCount += (Number(entry.children) || 0) * countNum;
+          totalRoomsCount += countNum;
+        }
+
+        const overallNights = differenceInDays(overallCheckOut!, overallCheckIn!) || 1;
+
+        updatedRooms = validatedRooms;
+        totals = {
+          roomTotal,
+          discountAmount: 0,
+          taxAmount: 0,
+          grandTotal: roomTotal,
+          paidAmount: 0,
+          dueAmount: roomTotal,
+          totalAdults: totalAdultsCount,
+          totalChildren: totalChildrenCount,
+          totalGuests: totalAdultsCount + totalChildrenCount,
+          totalRooms: totalRoomsCount,
+          totalNights: overallNights,
+          overallCheckInDate: overallCheckIn!,
+          overallCheckOutDate: overallCheckOut!,
+        };
       }
-      existingBooking.rooms = rooms;
+    }
+
+    if (updatedRooms) {
+      existingBooking.rooms = updatedRooms;
+      existingBooking.overallCheckInDate = totals.overallCheckInDate;
+      existingBooking.overallCheckOutDate = totals.overallCheckOutDate;
+      existingBooking.totalNights = totals.totalNights;
+      existingBooking.totalAdults = totals.totalAdults;
+      existingBooking.totalChildren = totals.totalChildren;
+      existingBooking.totalGuests = totals.totalGuests;
+      existingBooking.totalRooms = totals.totalRooms;
     }
 
     if (status && status !== existingBooking.status) {
@@ -1161,23 +1274,24 @@ export const updateBooking = async (req: Request, res: Response) => {
         { session }
       );
     }
+
     if (source) existingBooking.source = source;
     if (corporateDetails) existingBooking.corporateDetails = corporateDetails;
     if (vehicleDetails) existingBooking.vehicleDetails = vehicleDetails;
+
     if (preferences) existingBooking.preferences = preferences;
     if (internalNotes) existingBooking.internalNotes = internalNotes;
     if (specialRequests) existingBooking.specialRequests = specialRequests;
-
+    if (addons) existingBooking.addons = addons;
   
-    if (rooms) {
-      const totals = await calculateBookingTotals(
-        rooms,
-        existingBooking.bookingType,
-        corporateDetails
-      );
+    if (totals) {
       const existingTaxPercent = existingBooking.pricingSummary.taxPercentage || 12;
       const taxAmount = Math.round(totals.roomTotal * existingTaxPercent) / 100;
-      const grandTotal = totals.roomTotal + taxAmount;
+      const addonTotal = Array.isArray(existingBooking.addons) 
+        ? existingBooking.addons.reduce((sum: number, a: any) => sum + (Number(a.total) || 0), 0)
+        : 0;
+      
+      const grandTotal = totals.roomTotal + addonTotal + taxAmount;
       existingBooking.pricingSummary = {
         ...existingBooking.pricingSummary,
         roomTotal: totals.roomTotal,
@@ -1188,8 +1302,8 @@ export const updateBooking = async (req: Request, res: Response) => {
       };
     }
 
-    if (advanceAmount && advanceAmount > existingBooking.advanceAmount) {
-      const additionalAmount = advanceAmount - existingBooking.advanceAmount;
+    if (advanceAmount && advanceAmount > (existingBooking.advanceAmount || 0)) {
+      const additionalAmount = advanceAmount - (existingBooking.advanceAmount || 0);
       existingBooking.advanceAmount = advanceAmount;
       existingBooking.pricingSummary.paidAmount =
         (existingBooking.pricingSummary.paidAmount || 0) + additionalAmount;
@@ -1213,13 +1327,21 @@ export const updateBooking = async (req: Request, res: Response) => {
         paymentMode,
         (req as any).user?._id
       );
+    } else if (totals) {
+      // Recalculate paymentStatus based on updated totals even if no new advance payment
+      existingBooking.paymentStatus =
+        existingBooking.pricingSummary.dueAmount <= 0
+          ? "Paid"
+          : (existingBooking.pricingSummary.paidAmount || 0) > 0
+            ? "Partial"
+            : "Pending";
     }
 
     existingBooking.activityLogs.push({
       action: "Booking Updated",
       performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
       timestamp: new Date(),
-      details: "Booking details updated",
+      details: "Booking details updated via edit modal",
     });
 
     await existingBooking.save({ session });
