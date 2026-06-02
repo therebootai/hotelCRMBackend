@@ -119,7 +119,7 @@ export const allocateExactRoom = async (
     const checkin = await CheckIn.findById(checkinId).session(session);
     if (!checkin) throw new Error("Check-in record not found");
 
-    const room = await Room.findById(roomId).session(session);
+    const room = await Room.findById(roomId).populate("roomType", "basePrice").session(session);
     if (!room) throw new Error("Room not found");
 
     // Check conflict
@@ -161,8 +161,8 @@ export const allocateExactRoom = async (
         roomId: room._id as mongoose.Types.ObjectId,
         roomType: room.roomType,
         roomNumber: room.roomNumber,
-        originalPrice: room.basePrice,
-        appliedPrice: room.basePrice,
+        originalPrice: (room.roomType as any)?.basePrice || 0,
+        appliedPrice: (room.roomType as any)?.basePrice || 0,
         assignedAt: new Date(),
         assignedBy: new mongoose.Types.ObjectId(assignedBy)
       });

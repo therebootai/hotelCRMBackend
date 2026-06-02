@@ -213,12 +213,12 @@ export const createOrUpdateBilling = async (
     // Calculate room charges breakdown
     roomChargesBreakdown = await Promise.all(
       rooms.map(async (room) => {
-        const roomInfo = await Room.findById(room.roomId).populate("roomType", "name");
+        const roomInfo = await Room.findById(room.roomId).populate("roomType", "name basePrice");
         const pricing = await calculateDateWisePricing(
           room.roomId!,
           new Date(room.checkInDate),
           new Date(room.checkOutDate),
-          roomInfo?.basePrice || 0
+          (roomInfo?.roomType as any)?.basePrice || 0
         );
 
         // Extra bed charge calculation
@@ -396,7 +396,7 @@ export const calculateBookingTotals = async (
 
   const nightlyDetails = await Promise.all(
     rooms.map(async (room, index) => {
-      const roomInfo = await Room.findById(room.roomId);
+      const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
       const checkIn = new Date(room.checkInDate);
       const checkOut = new Date(room.checkOutDate);
       const nights = differenceInCalendarDays(checkOut, checkIn) || 1;
@@ -413,7 +413,7 @@ export const calculateBookingTotals = async (
         room.roomId!,
         checkIn,
         checkOut,
-        roomInfo?.basePrice || 0,
+        (roomInfo?.roomType as any)?.basePrice || 0,
         bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
       );
 
@@ -727,12 +727,12 @@ export const createBooking = async (req: Request, res: Response) => {
         }
 
         // Fetch room base price for calculation
-        const roomInfo = await Room.findById(room.roomId);
+        const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
         const pricing = await calculateDateWisePricing(
           room.roomId,
           new Date(room.checkInDate),
           new Date(room.checkOutDate),
-          roomInfo?.basePrice || 0,
+          (roomInfo?.roomType as any)?.basePrice || 0,
           bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
         );
 
@@ -746,7 +746,7 @@ export const createBooking = async (req: Request, res: Response) => {
           checkOutDate: room.checkOutDate,
           adults: room.adults || 1,
           children: room.children || 0,
-          pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || roomInfo?.basePrice || 0,
+          pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || (roomInfo?.roomType as any)?.basePrice || 0,
           mealPlan: room.mealPlan || mealPlan,
         });
       }
@@ -1171,12 +1171,12 @@ export const updateBooking = async (req: Request, res: Response) => {
             });
           }
           
-          const roomInfo = await Room.findById(room.roomId);
+          const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
           const pricing = await calculateDateWisePricing(
             room.roomId,
             new Date(room.checkInDate),
             new Date(room.checkOutDate),
-            roomInfo?.basePrice || 0,
+            (roomInfo?.roomType as any)?.basePrice || 0,
             existingBooking.bookingType === "Corporate" ? corporateDetails?.negotiatedRate || existingBooking.corporateDetails?.negotiatedRate : undefined
           );
 
@@ -1187,7 +1187,7 @@ export const updateBooking = async (req: Request, res: Response) => {
             checkOutDate: room.checkOutDate,
             adults: room.adults || 1,
             children: room.children || 0,
-            pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || roomInfo?.basePrice || 0,
+            pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || (roomInfo?.roomType as any)?.basePrice || 0,
             mealPlan: room.mealPlan || existingBooking.mealPlan,
           });
         }
