@@ -14,7 +14,7 @@ export const createRoomTypeSchema = z.object({
       .optional(),
 
     basePrice: z
-      .number()
+      .number({ message: "Base price is required" })
       .min(0, "Price cannot be negative"),
 
   }),
