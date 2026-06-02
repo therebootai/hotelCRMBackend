@@ -83,11 +83,23 @@ export const createBookingSchema = z.object({
     // Support paymentMode alias (frontend sends paymentMode)
     paymentMode: z.string().optional(),
 
+    // Tax/GST selected at booking time
+    selectedTaxId: z.string().optional(),
+
     expiresAt: z.coerce.date().optional(),
     pickupRequired: z.boolean().default(false),
     specialRequests: z.string().max(500).optional(),
     internalNotes: z.string().optional(),
     vehicleDetails: z.array(z.any()).default([]),
+    addons: z.array(
+      z.object({
+        serviceId: objectIdSchema.optional(),
+        serviceName: z.string().min(1),
+        quantity: z.number().min(1).default(1),
+        rate: z.number().min(0),
+        total: z.number().min(0),
+      })
+    ).optional().default([]),
   }).refine(
     (data) => {
       // Must have either customerId or customerDetails
@@ -130,6 +142,36 @@ export const updateBookingSchema = z.object({
     overallCheckOutDate: z.coerce.date().optional(),
     advanceAmount: z.number().min(0).optional(),
     specialRequests: z.string().max(500).optional(),
+    customerDetails: z.object({
+      name: z.string().min(1).optional(),
+      phone: z.string().min(10).optional(),
+      email: z.string().email().optional(),
+      address: z.string().optional(),
+    }).optional(),
+    source: z.enum([
+      "Website",
+      "Phone",
+      "Walk-in",
+      "Booking.com",
+      "Agoda",
+      "Goibibo",
+      "MakeMyTrip",
+      "Corporate",
+      "Travel Agent",
+    ]).optional(),
+    internalNotes: z.string().optional(),
+    paymentMode: z.string().optional(),
+    corporateDetails: z.object({
+      companyName: z.string().min(1).optional(),
+      gstNumber: z.string().optional(),
+      contactPerson: z.string().optional(),
+      mobile: z.string().optional(),
+      email: z.string().email().optional(),
+      address: z.string().optional(),
+      negotiatedRate: z.number().optional(),
+      companyCode: z.string().optional(),
+      notes: z.string().optional(),
+    }).optional(),
   }).strict(),
 });
 

@@ -66,3 +66,12 @@ export const getCheckInListSchema = z.object({
     status: z.string().optional(),
   }).passthrough(),
 });
+
+export const roomChangeSchema = z.object({
+  checkInId: z.string().min(1, "Check-in ID is required"),
+  newRoomId: z.string().min(1, "New room ID is required"),
+  newRoomType: z.string().optional(),
+  effectiveDate: z.string().refine((val) => !isNaN(Date.parse(val)), {
+    message: "Invalid effective date",
+  }),
+});

@@ -11,6 +11,8 @@ import fileUpload from "express-fileupload";
 type UploadedFile = fileUpload.UploadedFile;
 type UploadedFiles = { [key: string]: UploadedFile | UploadedFile[] };
 import { sendNotificationToRole } from "../services/notification.service";
+import DayAccessPackage from "../models/accessPackage.model";
+import { TaxGst } from "../models/taxGst.model";
 
 
 export const processCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
@@ -173,30 +175,123 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       ? new Date(expectedCheckOutTime)
       : (booking.rooms?.[0]?.checkOutDate || addDays(new Date(), 1));
 
-    // Calculate nights for billing
-    let nights = Math.max(1, differenceInDays(
+    // Calculate nights for billing (Room Stay only)
+    const isDayAccess = booking.bookingCategory === "Day Access";
+
+    let nights = isDayAccess ? 1 : Math.max(1, differenceInDays(
       startOfDay(checkOutTimeVal),
       startOfDay(checkInTimeVal)
     ));
 
-    const roomDetails = [];
-    const roomIds = [];
-
-    for (const sel of selections) {
-      const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
-      const roomId = sel.roomId || sel._id;
-
-      roomDetails.push({
-        roomId: new mongoose.Types.ObjectId(roomId),
-        roomType: sel.roomType || roomInfo?.roomType,
-        roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-        originalPrice: sel.originalPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
-        appliedPrice: sel.appliedPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
-        assignedAt: new Date(),
-      });
-      roomIds.push(roomId);
+    // Fetch package details if Day Access
+    let packageDetails: any = undefined;
+    if (isDayAccess) {
+      const accessPackage = booking.accessPackageId
+        ? await DayAccessPackage.findById(booking.accessPackageId).lean()
+        : null;
+      if (accessPackage) {
+        packageDetails = {
+          packageId: accessPackage._id,
+          packageName: accessPackage.packageName,
+          packageType: accessPackage.packageType,
+          entryTime: checkInTimeVal,
+          exitTime: checkOutTimeVal,
+        };
+      }
     }
 
+    // Build room details only for Room Stay bookings
+    let roomDetails: any[] = [];
+    const roomIds: string[] = [];
+
+    if (!isDayAccess) {
+      for (const sel of selections) {
+        const roomId = sel.roomId || sel._id;
+        if (!roomId) {
+          throw new Error("All room slots must be assigned before check-in");
+        }
+        const roomInfo = await Room.findById(roomId).session(mongoSession);
+
+        roomDetails.push({
+          roomId: new mongoose.Types.ObjectId(roomId),
+          roomType: sel.roomType || roomInfo?.roomType,
+          roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
+          originalPrice: sel.originalPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
+          appliedPrice: sel.appliedPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
+          assignedAt: new Date(),
+        });
+        roomIds.push(roomId);
+      }
+    } else {
+      // Day Access: process room selections as flat-priced add-ons
+      for (const sel of selections) {
+        const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
+        const roomId = sel.roomId || sel._id;
+
+        roomDetails.push({
+          roomId: new mongoose.Types.ObjectId(roomId),
+          roomType: sel.roomType || roomInfo?.roomType,
+          roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
+          originalPrice: sel.originalPrice || roomInfo?.basePrice || 0,
+          appliedPrice: sel.appliedPrice || sel.originalPrice || roomInfo?.basePrice || 0,
+          assignedAt: new Date(),
+        });
+        roomIds.push(roomId);
+      }
+    }
+
+    // Recalculate actual pricing from assigned rooms (Room Stay only)
+    if (!isDayAccess && roomDetails.length > 0) {
+      const actualRoomTotal = roomDetails.reduce(
+        (sum: number, r: any) => sum + (r.appliedPrice || 0) * nights,
+        0,
+      );
+
+      // Resolve tax percentage
+      let taxPct = 12;
+      if (booking.taxGstId) {
+        try {
+          const taxDoc = await TaxGst.findById(booking.taxGstId).session(mongoSession).lean() as any;
+          if (taxDoc?.percentage) {
+            taxPct = taxDoc.percentage;
+          }
+        } catch (_) { /* use default 12% */ }
+      } else if ((booking.pricingSummary as any)?.taxPercentage) {
+        taxPct = (booking.pricingSummary as any).taxPercentage;
+      }
+
+      const addonTotal = (booking.addons || []).reduce(
+        (s: number, a: any) => s + (Number(a.total) || 0),
+        0,
+      );
+      const actualTaxAmount = Math.round(actualRoomTotal * taxPct / 100);
+      const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
+      const paidSoFar = (booking.pricingSummary as any)?.paidAmount || 0;
+
+      await Booking.updateOne(
+        { _id: booking._id },
+        {
+          $set: {
+            "pricingSummary.roomTotal": actualRoomTotal,
+            "pricingSummary.taxAmount": actualTaxAmount,
+            "pricingSummary.taxPercentage": taxPct,
+            "pricingSummary.grandTotal": actualGrandTotal,
+            "pricingSummary.dueAmount": Math.max(0, actualGrandTotal - paidSoFar),
+          },
+        },
+        { session: mongoSession },
+      );
+
+      // Update local reference so paymentSummary below uses real values
+      (booking.pricingSummary as any) = {
+        ...(booking.pricingSummary as any),
+        roomTotal: actualRoomTotal,
+        taxAmount: actualTaxAmount,
+        taxPercentage: taxPct,
+        grandTotal: actualGrandTotal,
+        dueAmount: Math.max(0, actualGrandTotal - paidSoFar),
+      };
+    }
 
     const grcDetails = generateGRC ? [{
       grcNumber,
@@ -217,7 +312,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     const newCheckIn = new CheckIn({
       checkInId,
       bookingId: booking._id,
-      bookingCategory: "Room Stay",
+      bookingCategory: booking.bookingCategory || "Room Stay",
       checkInType: checkInType || "Individual",
       roomDetails,
       guests: guestList,
@@ -243,56 +338,107 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       })),
       grcDetails,
       vehicleDetails: parsedVehicles,
+      addons: (booking.addons || []).map((a: any) => ({
+        name: a.serviceName,
+        quantity: a.quantity,
+        rate: a.rate,
+        total: a.total,
+      })),
       notes: notes || "",
       specialRequests: specialRequests || "",
       liabilityAccepted: true,
       termsAcceptedAt: new Date(),
+      packageDetails: isDayAccess ? packageDetails : undefined,
       verificationChecklist: {
         primaryGuestVerified: guestList.some((g: any) => g.isPrimary && g.name),
         idUploaded: guestList.some((g: any) => g.idDocument?.secure_url),
         grcGenerated: !!generateGRC,
         paymentCollected: parsedTotalAdvance > 0,
-        roomAssigned: true,
+        roomAssigned: !isDayAccess && roomDetails.length > 0,
       },
       activityLogs: [{
         action: "Check-in Created via Single-Call Process",
         performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
         timestamp: new Date(),
-        details: `${checkInType || "Individual"} check-in. ${selections.length} room(s), ${parsedGuests.length} guest(s).`,
+        details: `${checkInType || "Individual"} check-in. ${isDayAccess ? "Day Access" : selections.length + " room(s)"} checked in. ${parsedGuests.length} guest(s).`,
       }],
     });
 
     await newCheckIn.save({ session: mongoSession });
     createdCheckIns.push(newCheckIn);
 
-    const totalBookedRooms = booking.rooms.length;
+    // For Day Access bookings, rooms may be empty/undefined — use optional chaining
+    const totalBookedRooms = (booking.rooms?.length || 0);
     const totalCheckedRooms = createdCheckIns.reduce(
       (sum: number, item: any) => sum + (item.roomDetails?.length || 0),
       0
     );
 
-    booking.status = totalCheckedRooms >= totalBookedRooms ? "Checked-In" : "Checked-In";
+    booking.status = isDayAccess ? "Checked-In" : (totalCheckedRooms >= totalBookedRooms ? "Checked-In" : booking.status);
     await booking.save({ session: mongoSession });
 
-    const roomChargesBreakdown = roomDetails.map((room: any) => {
-      const rate = room.appliedPrice || 0;
-      const totalCharge = nights * rate;
-      return {
+    // Update booking's paidAmount and dueAmount to include check-in payment
+    if (parsedTotalAdvance > 0) {
+      const bookingPaidBefore = (booking.pricingSummary as any)?.paidAmount || 0;
+      const totalPaidNow = bookingPaidBefore + parsedTotalAdvance;
+      const grandTotal = (booking.pricingSummary as any)?.grandTotal || 0;
+      const newDue = Math.max(0, grandTotal - totalPaidNow);
+      const newPaymentStatus = grandTotal > 0 && totalPaidNow >= grandTotal ? "Paid" : "Partial";
+
+      await Booking.updateOne(
+        { _id: booking._id },
+        {
+          $set: {
+            "pricingSummary.paidAmount": totalPaidNow,
+            "pricingSummary.dueAmount": newDue,
+            paymentStatus: newPaymentStatus,
+          },
+        },
+        { session: mongoSession },
+      );
+    }
+
+    // Build room charges: for Room Stay use per-night, for Day Access use flat add-on price
+    let roomChargesBreakdown: any[];
+    let totalRoomCharges: number;
+
+    if (isDayAccess) {
+      // Day Access: rooms are optional add-ons with flat pricing
+      roomChargesBreakdown = roomDetails.map((room: any) => ({
         roomId: room.roomId,
         roomNumber: room.roomNumber,
         checkInDate: checkInTimeVal,
         checkOutDate: checkOutTimeVal,
-        nights,
-        ratePerNight: rate,
-        totalRoomCharge: totalCharge,
+        nights: 1,
+        ratePerNight: room.appliedPrice || 0,
+        totalRoomCharge: room.appliedPrice || 0,
         stayType: "Original" as const,
-      };
-    });
+      }));
+      // Package price is the base, room add-ons are on top
+      totalRoomCharges = (booking.pricingSummary?.roomTotal || booking.pricingSummary?.grandTotal || 0)
+        + roomChargesBreakdown.reduce((sum: number, r: any) => sum + r.totalRoomCharge, 0);
+    } else {
+      roomChargesBreakdown = roomDetails.map((room: any) => {
+        const rate = room.appliedPrice || 0;
+        const totalCharge = nights * rate;
+        return {
+          roomId: room.roomId,
+          roomNumber: room.roomNumber,
+          checkInDate: checkInTimeVal,
+          checkOutDate: checkOutTimeVal,
+          nights,
+          ratePerNight: rate,
+          totalRoomCharge: totalCharge,
+          stayType: "Original" as const,
+        };
+      });
+      totalRoomCharges = roomChargesBreakdown.reduce(
+        (sum: number, r: any) => sum + r.totalRoomCharge,
+        0
+      );
+    }
 
-    const totalRoomCharges = roomChargesBreakdown.reduce(
-      (sum: number, r: any) => sum + r.totalRoomCharge,
-      0
-    );
+    const bookingAddonTotal = (booking.addons || []).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
 
     let billing = await Billing.findOne({ bookingId: booking._id }).session(mongoSession);
 
@@ -301,7 +447,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       const count = await Billing.countDocuments({}).session(mongoSession);
       billing = new Billing({
         invoiceNumber: `INV-${Date.now()}-${count + 1}`,
-        invoiceType: checkInType === "Corporate" ? "Corporate" : "Room",
+        invoiceType: isDayAccess ? "Day Access" : (checkInType === "Corporate" ? "Corporate" : "Room"),
         billingStatus: "Draft",
         settlementStatus: "Open",
         checkInId: newCheckIn._id,
@@ -317,11 +463,17 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         } : undefined,
         roomChargesBreakdown,
         totalRoomCharges,
-        extraServices: [],
+        extraServices: (booking.addons || []).map((a: any) => ({
+          serviceName: a.serviceName,
+          quantity: a.quantity,
+          rate: a.rate,
+          total: a.total,
+          date: new Date(),
+        })),
         facilityCharges: [],
         packageCharges: [],
         otherCharges: 0,
-        subTotal: totalRoomCharges,
+        subTotal: totalRoomCharges + bookingAddonTotal,
         taxBreakdown: {
           cgst: (booking.pricingSummary?.taxAmount || 0) / 2,
           sgst: (booking.pricingSummary?.taxAmount || 0) / 2,
@@ -330,9 +482,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           totalTax: booking.pricingSummary?.taxAmount || 0,
         },
         discount: 0,
-        grandTotal: totalRoomCharges + (booking.pricingSummary?.taxAmount || 0),
+        grandTotal: totalRoomCharges + bookingAddonTotal + (booking.pricingSummary?.taxAmount || 0),
         paidAmount: parsedTotalAdvance,
-        dueAmount: (totalRoomCharges + (booking.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
+        dueAmount: (totalRoomCharges + bookingAddonTotal + (booking.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
         paymentStatus: parsedTotalAdvance > 0 ? "Partial" : "Unpaid",
         paymentModeSummary: {
           cash: parsedPayments.filter((p: any) => p.paymentMode === "Cash").reduce((s: number, p: any) => s + Number(p.amount), 0),
@@ -427,19 +579,21 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     await billing.save({ session: mongoSession });
 
-    // Notification: check-in completed
-    try {
-      const roomNumbers = roomDetails.map((r: any) => r.roomNumber).join(", ");
-      await sendNotificationToRole(
-        "Housekeeping",
-        "housekeeping",
-        "Check-in Completed",
-        `Guest checked in at Room(s) ${roomNumbers}. Prepare for next checkout.`,
-        newCheckIn._id,
-        "CheckIn"
-      );
-    } catch (notifErr) {
-      console.error("Failed to send checkin notification:", notifErr);
+    // Notification: check-in completed (skip room-specific notification for Day Access)
+    if (!isDayAccess) {
+      try {
+        const roomNumbers = roomDetails.map((r: any) => r.roomNumber).join(", ");
+        await sendNotificationToRole(
+          "Housekeeping",
+          "housekeeping",
+          "Check-in Completed",
+          `Guest checked in at Room(s) ${roomNumbers}. Prepare for next checkout.`,
+          newCheckIn._id,
+          "CheckIn"
+        );
+      } catch (notifErr) {
+        console.error("Failed to send checkin notification:", notifErr);
+      }
     }
 
     await mongoSession.commitTransaction();
@@ -676,7 +830,7 @@ export const getCheckInList = async (req: Request, res: Response) => {
     const list = await CheckIn.find(query)
       .populate({
         path: "bookingId",
-        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId"
+        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId accessPackageId"
       })
       .populate({
         path: "roomDetails.roomId",
@@ -886,7 +1040,7 @@ export const getCheckInById = async (req: Request, res: Response) => {
     const checkIn = await CheckIn.findById(id)
       .populate({
         path: "bookingId",
-        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId rooms"
+        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId rooms accessPackageId"
       })
       .populate({
         path: "roomDetails.roomId",
@@ -1228,6 +1382,10 @@ export const getStayOverview = async (req: Request, res: Response) => {
             end: ci.expectedCheckOutTime,
             color: "red",
             status: ci.status,
+            price: rd.appliedPrice || 0,
+            roomNumber: rd.roomNumber || (rd.roomId as any)?.roomNumber || "",
+            roomType: (rd.roomType as any)?._id?.toString() || rd.roomType?.toString() || "",
+            totalAdvanceAmount: ci.totalAdvanceAmount || 0,
           });
         }
       }
@@ -1249,5 +1407,180 @@ export const getStayOverview = async (req: Request, res: Response) => {
       success: false,
       message: error.message,
     });
+  }
+};
+
+// ============================================================
+// ROOM CHANGE
+// ============================================================
+export const roomChange = async (req: Request, res: Response) => {
+  const mongoSession = await mongoose.startSession();
+  mongoSession.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const { newRoomId, newRoomType, effectiveDate } = req.body;
+
+    const checkIn = await CheckIn.findById(id).session(mongoSession);
+    if (!checkIn) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(404).json({ success: false, message: "Check-in not found" });
+    }
+
+    const currentRoomDetail = checkIn.roomDetails?.[0];
+    if (!currentRoomDetail) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(400).json({ success: false, message: "No room details found" });
+    }
+
+    const bookingStart = new Date(checkIn.checkInTime);
+    const bookingEnd = new Date(checkIn.expectedCheckOutTime);
+
+    const conflict = await CheckIn.findOne({
+      _id: { $ne: checkIn._id },
+      status: "Active",
+      "roomDetails.roomId": new mongoose.Types.ObjectId(newRoomId),
+      $or: [
+        {
+          checkInTime: { $lt: bookingEnd },
+          expectedCheckOutTime: { $gt: bookingStart },
+        },
+      ],
+    }).session(mongoSession);
+
+    if (conflict) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Room is not available for the booking period",
+      });
+    }
+
+    const bookingConflict = await Booking.findOne({
+      status: { $in: ["Pending", "Confirmed", "Checked-In"] },
+      "rooms.roomId": new mongoose.Types.ObjectId(newRoomId),
+      $or: [
+        {
+          "rooms.checkInDate": { $lt: bookingEnd },
+          "rooms.checkOutDate": { $gt: bookingStart },
+        },
+      ],
+    }).session(mongoSession);
+
+    if (bookingConflict) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Room is not available for the booking period",
+      });
+    }
+
+    const newRoom = await Room.findById(newRoomId).session(mongoSession);
+    if (!newRoom) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(404).json({ success: false, message: "Room not found" });
+    }
+
+    const roomTypeId = newRoomType
+      ? new mongoose.Types.ObjectId(newRoomType)
+      : (newRoom.roomType as mongoose.Types.ObjectId);
+
+    const nights = Math.max(
+      1,
+      differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart))
+    );
+
+    checkIn.roomDetails = [
+      {
+        roomId: new mongoose.Types.ObjectId(newRoomId),
+        roomType: roomTypeId,
+        roomNumber: newRoom.roomNumber,
+        originalPrice: newRoom.basePrice || 0,
+        appliedPrice: newRoom.basePrice || 0,
+        assignedAt: new Date(),
+      },
+    ];
+
+    checkIn.activityLogs.push({
+      action: "Room Changed",
+      performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+      timestamp: new Date(),
+      details: `Room changed from ${currentRoomDetail.roomNumber} to ${newRoom.roomNumber} (${currentRoomDetail.appliedPrice} → ${newRoom.basePrice})`,
+    });
+
+    await checkIn.save({ session: mongoSession });
+
+    const billing = await Billing.findOne({ checkInId: checkIn._id }).session(mongoSession);
+    if (billing) {
+      const oldRoomNights = Math.max(
+        1,
+        differenceInDays(
+          startOfDay(effectiveDate ? new Date(effectiveDate) : bookingStart),
+          startOfDay(bookingStart)
+        )
+      );
+
+      // Closing entry for old room (prepend — audit trail preserved)
+      const closingEntry = {
+        roomId: currentRoomDetail.roomId,
+        roomNumber: currentRoomDetail.roomNumber,
+        checkInDate: bookingStart,
+        checkOutDate: effectiveDate ? new Date(effectiveDate) : bookingStart,
+        nights: oldRoomNights,
+        ratePerNight: currentRoomDetail.appliedPrice || 0,
+        totalRoomCharge: oldRoomNights * (currentRoomDetail.appliedPrice || 0),
+        stayType: "Original" as const,
+      };
+
+      // New room entry appended
+      const newRoomEntry = {
+        roomId: new mongoose.Types.ObjectId(newRoomId),
+        roomNumber: newRoom.roomNumber,
+        checkInDate: effectiveDate ? new Date(effectiveDate) : bookingStart,
+        checkOutDate: bookingEnd,
+        nights: 0,
+        ratePerNight: newRoom.basePrice || 0,
+        totalRoomCharge: 0,
+        stayType: "Transferred" as const,
+      };
+
+      billing.roomChargesBreakdown = [closingEntry, newRoomEntry];
+      billing.totalRoomCharges = billing.roomChargesBreakdown.reduce(
+        (sum: number, r: any) => sum + r.totalRoomCharge,
+        0
+      );
+      billing.subTotal = billing.totalRoomCharges + (billing.totalFacilityCharges || 0);
+      billing.grandTotal = billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
+      billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
+
+      billing.activityLogs.push({
+        action: "Billing Updated on Room Change",
+        performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        timestamp: new Date(),
+        details: `Room changed: billing recalculated at ₹${newRoom.basePrice}/night`,
+      });
+
+      await billing.save({ session: mongoSession });
+    }
+
+    await mongoSession.commitTransaction();
+    mongoSession.endSession();
+
+    return res.status(200).json({
+      success: true,
+      message: "Room changed successfully",
+      data: checkIn,
+    });
+
+  } catch (error: any) {
+    await mongoSession.abortTransaction();
+    mongoSession.endSession();
+    console.error("roomChange error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };

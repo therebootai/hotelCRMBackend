@@ -62,7 +62,7 @@ export const processCheckoutSchema = z.object({
     checkInId: objectIdSchema,
     extraServices: z.array(
       z.object({
-        serviceId: objectIdSchema,
+        serviceId: objectIdSchema.optional(),
         serviceName: z.string(),
         quantity: z.number().min(1),
         rate: z.number().min(0),
@@ -104,6 +104,21 @@ export const getBillingListSchema = z.object({
     limit: z.string().regex(/^\d+$/).optional(),
     search: z.string().optional(),
     status: z.string().optional(),
+  }),
+});
+
+// For GET /api/v1/billing/:id/invoice-pdf
+export const exportSingleBillingPdfSchema = z.object({
+  params: z.object({
+    id: objectIdSchema,
+  }),
+});
+
+// For GET /api/v1/billing/export-pdf
+export const exportBillingPdfSchema = z.object({
+  query: z.object({
+    startDate: z.string().min(1, "startDate is required"),
+    endDate: z.string().min(1, "endDate is required"),
   }),
 });
 

@@ -42,7 +42,10 @@ const app = express();
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || /^http:\/\/localhost:\d+$/.test(origin)) {
+      const allowedOrigins = [
+        "https://hotelcrmproto.netlify.app"
+      ];
+      if (!origin || /^http:\/\/localhost:\d+$/.test(origin) || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));

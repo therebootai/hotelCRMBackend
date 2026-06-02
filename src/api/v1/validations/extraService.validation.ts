@@ -8,7 +8,7 @@ export const createExtraServiceSchema = z.object({
     name: z
       .string({ message: "Extra Service name is required" })
       .min(2, "Name must be at least 2 characters"),
-      
+    price: z.number({ message: "Price is required" }).min(0, "Price must be non-negative"),
     isActive: z.boolean().optional(),
   }),
 });
@@ -23,6 +23,7 @@ export const updateExtraServiceSchema = z.object({
   body: z
     .object({
       name: z.string().min(2).optional(),
+      price: z.number().min(0).optional(),
       isActive: z.boolean().optional(),
     })
     .strict(),
