@@ -225,7 +225,7 @@ export const processCheckout = async (req: Request, res: Response) => {
     }
 
     const roomIds = checkInData.roomDetails.map((rd: any) => rd.roomId._id || rd.roomId);
-    await Room.updateMany({ _id: { $in: roomIds } }, { status: "Available" }).session(session);
+    await Room.updateMany({ _id: { $in: roomIds } }, { status: "Active" }).session(session);
 
     checkInData.status = "Checked-Out";
     checkInData.actualCheckOutTime = new Date();
