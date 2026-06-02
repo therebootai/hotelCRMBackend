@@ -1391,7 +1391,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
       });
     }
 
-    await transitionBookingState(
+    const cancelledBooking = await transitionBookingState(
       booking._id,
       "Cancelled",
       {
@@ -1400,30 +1400,29 @@ export const cancelBooking = async (req: Request, res: Response) => {
       },
       { session }
     );
-    booking.cancellationDetails = {
+    cancelledBooking.cancellationDetails = {
       cancelledAt: new Date(),
       cancelledBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
       reason: reason || "No reason provided",
       refundAmount,
     };
 
-
-    booking.activityLogs.push({
+    cancelledBooking.activityLogs.push({
       action: "Booking Cancelled",
       performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
       timestamp: new Date(),
       details: `Cancelled. Reason: ${reason}. Refund: ₹${refundAmount}`,
     });
 
-    await booking.save({ session });
+    await cancelledBooking.save({ session });
 
-    const billing = await Billing.findOne({ bookingId: booking._id }).session(session);
+    const billing = await Billing.findOne({ bookingId: cancelledBooking._id }).session(session);
     if (billing) {
       const operatorId = (req as any).user?._id || new mongoose.Types.ObjectId();
       if (refundAmount > 0) {
         await recordRefund(
           billing._id,
-          booking._id,
+          cancelledBooking._id,
           refundAmount,
           reason || "Booking Cancelled Refund",
           operatorId,
@@ -1445,13 +1444,13 @@ export const cancelBooking = async (req: Request, res: Response) => {
 
     // Notification: booking cancelled
     try {
-      const guestName = booking.bookingContact?.name || "Guest";
+      const guestName = cancelledBooking.bookingContact?.name || "Guest";
       await sendNotificationToRole(
         "Manager",
         "booking",
         "Booking Cancelled",
         `Booking cancelled by staff: ${guestName}. Reason: ${reason || "No reason provided"}. Refund: ₹${refundAmount || 0}.`,
-        booking._id,
+        cancelledBooking._id,
         "Booking"
       );
     } catch (notifErr) {
@@ -1463,7 +1462,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       message: "Booking cancelled successfully",
-      data: booking,
+      data: cancelledBooking,
     });
   } catch (error: any) {
     await session.abortTransaction();

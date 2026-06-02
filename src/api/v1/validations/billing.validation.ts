@@ -62,7 +62,7 @@ export const processCheckoutSchema = z.object({
     checkInId: objectIdSchema,
     extraServices: z.array(
       z.object({
-        serviceId: objectIdSchema,
+        serviceId: objectIdSchema.optional(),
         serviceName: z.string(),
         quantity: z.number().min(1),
         rate: z.number().min(0),
