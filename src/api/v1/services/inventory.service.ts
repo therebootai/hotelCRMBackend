@@ -5,6 +5,12 @@ import { CheckIn } from "@/api/v1/models/checkin.model";
 import { MaintenanceBlock } from "@/api/v1/models/maintenanceBlock.model";
 import { RoomStatus, RoomStatusEnum } from "@/api/v1/models/roomStatus.model";
 
+interface IPopulatedRoomType {
+  _id: mongoose.Types.ObjectId;
+  basePrice: number;
+  name?: string;
+}
+
 // ==========================================
 // LAYER 1 — ROOM TYPE AVAILABILITY
 // ==========================================
@@ -161,8 +167,8 @@ export const allocateExactRoom = async (
         roomId: room._id as mongoose.Types.ObjectId,
         roomType: room.roomType,
         roomNumber: room.roomNumber,
-        originalPrice: (room.roomType as any)?.basePrice || 0,
-        appliedPrice: (room.roomType as any)?.basePrice || 0,
+        originalPrice: (room.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+        appliedPrice: (room.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
         assignedAt: new Date(),
         assignedBy: new mongoose.Types.ObjectId(assignedBy)
       });
