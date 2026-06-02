@@ -518,7 +518,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
 
     // Fetch all matching rooms
     let rooms = await Room.find(roomFilter)
-      .populate("roomType", "name description")
+      .populate("roomType", "name description basePrice")
       .populate("amenities", "name icon")
       .lean();
 
@@ -548,11 +548,12 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
         );
 
         // Calculate dynamic pricing
+        const roomTypeBasePrice = (room.roomType as IPopulatedRoomType | null)?.basePrice ?? 0;
         const pricing = await calculateDateWisePricing(
           room._id,
           checkInDate,
           checkOutDate,
-          room.basePrice
+          roomTypeBasePrice
         );
 
         // Apply price range filter
@@ -570,7 +571,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
             floor: room.floor,
             maxAdults: room.maxAdults,
             maxChildren: room.maxChildren,
-            basePrice: room.basePrice,
+            basePrice: roomTypeBasePrice,
           },
           roomType: room.roomType,
           amenities: room.amenities,
@@ -579,7 +580,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
             roomNumber: room.roomNumber,
             roomType: room.roomType?.name || "",
             roomTypeId: room.roomType?._id,
-            basePrice: room.basePrice,
+            basePrice: roomTypeBasePrice,
             nightlyBreakdown: pricing.nightlyBreakdown,
             totalNights: pricing.totalNights,
             totalPrice: pricing.totalPrice,

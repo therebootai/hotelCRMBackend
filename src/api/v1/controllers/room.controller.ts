@@ -63,7 +63,7 @@ export const getAllRooms = async (
     // Fetch data and total count concurrently for better performance
     const [rooms, totalCount] = await Promise.all([
       Room.find(filter)
-        .populate("roomType", "name")
+        .populate("roomType", "name basePrice")
         .populate("amenities", "name icon")
         .populate("gstId", "name percentage")
         .sort({ roomNumber: 1 })
@@ -100,7 +100,7 @@ export const getRoomById = async (
     const { id } = req.params;
     
     const room = await Room.findById(id)
-        .populate("roomType", "name description images")
+        .populate("roomType", "name description images basePrice")
         .populate("amenities", "name icon")
         .populate("gstId", "name percentage type");
 
