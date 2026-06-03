@@ -8,11 +8,15 @@ export const createRoomTypeSchema = z.object({
     name: z
       .string({ message: "Room Type name is required" })
       .min(2, "Name must be at least 2 characters"),
-    
+
     description: z
       .string()
       .optional(),
-      
+
+    basePrice: z
+      .number({ message: "Base price is required" })
+      .min(0, "Price cannot be negative"),
+
   }),
 });
 
@@ -28,9 +32,14 @@ export const updateRoomTypeSchema = z.object({
       .string()
       .min(2, "Name must be at least 2 characters")
       .optional(),
-      
+
     description: z
       .string()
+      .optional(),
+
+    basePrice: z
+      .number()
+      .min(0, "Price cannot be negative")
       .optional(),
   }),
 });

@@ -125,6 +125,8 @@ export const updateBookingSchema = z.object({
       "Cancelled",
       "No-Show",
     ]).optional(),
+    bookingCategory: z.enum(["Room Stay", "Day Access", "Event", "Banquet"]).optional(),
+    bookingType: z.enum(["Individual", "Corporate"]).optional(),
     rooms: z.array(
       z.object({
         roomType: objectIdSchema.optional(),
@@ -139,8 +141,24 @@ export const updateBookingSchema = z.object({
         extraBedCharge: z.number().min(0).optional(),
       })
     ).optional(),
+    roomTypesData: z.array(
+      z.object({
+        roomTypeId: objectIdSchema,
+        roomTypeName: z.string().optional(),
+        basePrice: z.number().min(0).default(0),
+        count: z.number().min(1).default(1),
+        checkInDate: z.coerce.date(),
+        checkOutDate: z.coerce.date(),
+        adults: z.number().min(0).default(1),
+        children: z.number().min(0).default(0),
+      })
+    ).optional(),
+    accessPackageId: objectIdSchema.optional(),
+    visitDate: z.coerce.date().optional(),
     overallCheckOutDate: z.coerce.date().optional(),
     advanceAmount: z.number().min(0).optional(),
+    adults: z.number().min(0).optional(),
+    children: z.number().min(0).optional(),
     specialRequests: z.string().max(500).optional(),
     customerDetails: z.object({
       name: z.string().min(1).optional(),
@@ -161,6 +179,7 @@ export const updateBookingSchema = z.object({
     ]).optional(),
     internalNotes: z.string().optional(),
     paymentMode: z.string().optional(),
+    selectedTaxId: z.string().optional(),
     corporateDetails: z.object({
       companyName: z.string().min(1).optional(),
       gstNumber: z.string().optional(),
@@ -172,7 +191,23 @@ export const updateBookingSchema = z.object({
       companyCode: z.string().optional(),
       notes: z.string().optional(),
     }).optional(),
-  }).strict(),
+    vehicleDetails: z.array(z.any()).optional(),
+    addons: z.array(
+      z.object({
+        serviceId: objectIdSchema.optional(),
+        serviceName: z.string().min(1),
+        quantity: z.number().min(1).default(1),
+        rate: z.number().min(0),
+        total: z.number().min(0),
+      })
+    ).optional(),
+    travelAgentInfo: z.object({
+      agentName: z.string().optional(),
+      name: z.string().optional(),
+      referenceId: z.string().optional(),
+    }).optional(),
+    preferences: z.any().optional(),
+  }),
 });
 
 export const cancelBookingSchema = z.object({

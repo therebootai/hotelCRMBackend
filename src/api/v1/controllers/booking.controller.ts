@@ -63,6 +63,12 @@ interface IAvailabilityResult {
   unavailableReason?: string;
 }
 
+interface IPopulatedRoomType {
+  _id: mongoose.Types.ObjectId;
+  basePrice: number;
+  name?: string;
+}
+
 
 export const checkRoomAvailability = async (
   roomId: mongoose.Types.ObjectId,
@@ -213,12 +219,12 @@ export const createOrUpdateBilling = async (
     // Calculate room charges breakdown
     roomChargesBreakdown = await Promise.all(
       rooms.map(async (room) => {
-        const roomInfo = await Room.findById(room.roomId).populate("roomType", "name");
+        const roomInfo = await Room.findById(room.roomId).populate("roomType", "name basePrice");
         const pricing = await calculateDateWisePricing(
           room.roomId!,
           new Date(room.checkInDate),
           new Date(room.checkOutDate),
-          roomInfo?.basePrice || 0
+          (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0
         );
 
         // Extra bed charge calculation
@@ -228,7 +234,7 @@ export const createOrUpdateBilling = async (
         return {
           roomId: room.roomId,
           roomNumber: roomInfo?.roomNumber || "",
-          roomType: (roomInfo?.roomType as any)?.name || "",
+          roomType: (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.name || "",
           checkInDate: room.checkInDate,
           checkOutDate: room.checkOutDate,
           nights: pricing.totalNights,
@@ -396,7 +402,7 @@ export const calculateBookingTotals = async (
 
   const nightlyDetails = await Promise.all(
     rooms.map(async (room, index) => {
-      const roomInfo = await Room.findById(room.roomId);
+      const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
       const checkIn = new Date(room.checkInDate);
       const checkOut = new Date(room.checkOutDate);
       const nights = differenceInCalendarDays(checkOut, checkIn) || 1;
@@ -413,7 +419,7 @@ export const calculateBookingTotals = async (
         room.roomId!,
         checkIn,
         checkOut,
-        roomInfo?.basePrice || 0,
+        (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
         bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
       );
 
@@ -512,7 +518,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
 
     // Fetch all matching rooms
     let rooms = await Room.find(roomFilter)
-      .populate("roomType", "name description")
+      .populate("roomType", "name description basePrice")
       .populate("amenities", "name icon")
       .lean();
 
@@ -542,11 +548,12 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
         );
 
         // Calculate dynamic pricing
+        const roomTypeBasePrice = (room.roomType as IPopulatedRoomType | null)?.basePrice ?? 0;
         const pricing = await calculateDateWisePricing(
           room._id,
           checkInDate,
           checkOutDate,
-          room.basePrice
+          roomTypeBasePrice
         );
 
         // Apply price range filter
@@ -564,7 +571,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
             floor: room.floor,
             maxAdults: room.maxAdults,
             maxChildren: room.maxChildren,
-            basePrice: room.basePrice,
+            basePrice: roomTypeBasePrice,
           },
           roomType: room.roomType,
           amenities: room.amenities,
@@ -573,7 +580,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
             roomNumber: room.roomNumber,
             roomType: room.roomType?.name || "",
             roomTypeId: room.roomType?._id,
-            basePrice: room.basePrice,
+            basePrice: roomTypeBasePrice,
             nightlyBreakdown: pricing.nightlyBreakdown,
             totalNights: pricing.totalNights,
             totalPrice: pricing.totalPrice,
@@ -727,12 +734,12 @@ export const createBooking = async (req: Request, res: Response) => {
         }
 
         // Fetch room base price for calculation
-        const roomInfo = await Room.findById(room.roomId);
+        const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
         const pricing = await calculateDateWisePricing(
           room.roomId,
           new Date(room.checkInDate),
           new Date(room.checkOutDate),
-          roomInfo?.basePrice || 0,
+          (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
           bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
         );
 
@@ -746,7 +753,7 @@ export const createBooking = async (req: Request, res: Response) => {
           checkOutDate: room.checkOutDate,
           adults: room.adults || 1,
           children: room.children || 0,
-          pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || roomInfo?.basePrice || 0,
+          pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
           mealPlan: room.mealPlan || mealPlan,
         });
       }
@@ -1171,12 +1178,12 @@ export const updateBooking = async (req: Request, res: Response) => {
             });
           }
           
-          const roomInfo = await Room.findById(room.roomId);
+          const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
           const pricing = await calculateDateWisePricing(
             room.roomId,
             new Date(room.checkInDate),
             new Date(room.checkOutDate),
-            roomInfo?.basePrice || 0,
+            (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
             existingBooking.bookingType === "Corporate" ? corporateDetails?.negotiatedRate || existingBooking.corporateDetails?.negotiatedRate : undefined
           );
 
@@ -1187,7 +1194,7 @@ export const updateBooking = async (req: Request, res: Response) => {
             checkOutDate: room.checkOutDate,
             adults: room.adults || 1,
             children: room.children || 0,
-            pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || roomInfo?.basePrice || 0,
+            pricePerNight: pricing.nightlyBreakdown[0]?.finalPrice || room.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
             mealPlan: room.mealPlan || existingBooking.mealPlan,
           });
         }
@@ -1542,7 +1549,7 @@ export const getBookingOverview = async (req: Request, res: Response) => {
       ],
     })
       .populate("customerId", "name phone")
-      .populate("rooms.roomId", "roomNumber roomType basePrice status")
+      .populate("rooms.roomId", "roomNumber roomType status")
       .populate("rooms.roomType", "name")
       .lean();
 
@@ -1635,10 +1642,10 @@ export const getBookingOverview = async (req: Request, res: Response) => {
 
     // Calculate stats
     const totalRooms = rooms.length;
-    const availableRooms = rooms.filter(r => r.status === "Active").length;
     const occupiedRooms = roomTimelineData.filter(r => r.bookings.length > 0).length;
     const maintenanceRooms = rooms.filter(r => r.status === "Maintenance").length;
     const blockedRooms = rooms.filter(r => r.status === "Blocked").length;
+    const availableRooms = roomTimelineData.filter(r => r.status === "available" && r.bookings.length === 0).length;
 
     const allBookingsCount = bookings.length + checkIns.length;
     const activeBookingsCount = checkIns.length;

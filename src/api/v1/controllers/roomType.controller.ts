@@ -1,6 +1,7 @@
 import { Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { RoomType } from "@/api/v1/models/roomType.model";
+import { Room } from "@/api/v1/models/room.model";
 import { httpError } from "@/api/v1/utils/httpError";
 import httpResponse from "@/api/v1/utils/httpResponse";
 import { AuthRequest } from "@/api/v1/interfaces/auth";
@@ -16,7 +17,7 @@ export const createRoomType = async (
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { name, description } = req.body;
+    const { name, description, basePrice } = req.body;
     let uploadedImageUrls: string[] = [];
 
     const existingRoomType = await RoomType.findOne({ name }).session(session);
@@ -27,6 +28,7 @@ export const createRoomType = async (
     const newRoomType = new RoomType({
       name,
       description,
+      basePrice,
       images: uploadedImageUrls,
     });
 
@@ -112,7 +114,7 @@ export const updateRoomType = async (
   session.startTransaction();
   try {
     const { id } = req.params;
-    const { name, description } = req.body;
+    const { name, description, basePrice } = req.body;
 
     const roomType = await RoomType.findById(id).session(session);
     if (!roomType) throw new Error("Room Type not found");
@@ -120,6 +122,10 @@ export const updateRoomType = async (
 
     if (name) roomType.name = name;
     if (description !== undefined) roomType.description = description;
+    if (basePrice !== undefined && basePrice !== roomType.basePrice) {
+      roomType.basePrice = basePrice;
+      await Room.updateMany({ roomType: id }, { $set: { basePrice } }, { session });
+    }
 
     await roomType.save({ session });
     await session.commitTransaction();

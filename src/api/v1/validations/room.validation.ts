@@ -14,8 +14,7 @@ export const createRoomSchema = z.object({
     maxChildren: z.number().min(0),
     extraBedAllowed: z.boolean().default(false),
     extraBedCharge: z.number().min(0).optional(),
-    
-    basePrice: z.number({ message: "Base price is required" }).min(0),
+
     discountPercentage: z.number().min(0).max(100).default(0),
     gstId: z.string().optional(),
     
@@ -44,7 +43,6 @@ export const updateRoomSchema = z.object({
     maxChildren: z.number().min(0).optional(),
     extraBedAllowed: z.boolean().optional(),
     extraBedCharge: z.number().min(0).optional(),
-    basePrice: z.number().min(0).optional(),
     discountPercentage: z.number().min(0).max(100).optional(),
     gstId: z.string().optional(),
     roomSize: z.number().min(1).optional(),
