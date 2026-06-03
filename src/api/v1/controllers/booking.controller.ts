@@ -1642,10 +1642,10 @@ export const getBookingOverview = async (req: Request, res: Response) => {
 
     // Calculate stats
     const totalRooms = rooms.length;
-    const availableRooms = rooms.filter(r => r.status === "Active").length;
     const occupiedRooms = roomTimelineData.filter(r => r.bookings.length > 0).length;
     const maintenanceRooms = rooms.filter(r => r.status === "Maintenance").length;
     const blockedRooms = rooms.filter(r => r.status === "Blocked").length;
+    const availableRooms = roomTimelineData.filter(r => r.status === "available" && r.bookings.length === 0).length;
 
     const allBookingsCount = bookings.length + checkIns.length;
     const activeBookingsCount = checkIns.length;

@@ -1,6 +1,7 @@
 import { Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { RoomType } from "@/api/v1/models/roomType.model";
+import { Room } from "@/api/v1/models/room.model";
 import { httpError } from "@/api/v1/utils/httpError";
 import httpResponse from "@/api/v1/utils/httpResponse";
 import { AuthRequest } from "@/api/v1/interfaces/auth";
@@ -121,7 +122,10 @@ export const updateRoomType = async (
 
     if (name) roomType.name = name;
     if (description !== undefined) roomType.description = description;
-    if (basePrice !== undefined) roomType.basePrice = basePrice;
+    if (basePrice !== undefined && basePrice !== roomType.basePrice) {
+      roomType.basePrice = basePrice;
+      await Room.updateMany({ roomType: id }, { $set: { basePrice } }, { session });
+    }
 
     await roomType.save({ session });
     await session.commitTransaction();

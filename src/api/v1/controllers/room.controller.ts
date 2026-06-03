@@ -1,6 +1,7 @@
 import { Response, NextFunction, Request } from "express";
 import mongoose from "mongoose";
 import { Room } from "@/api/v1/models/room.model";
+import { RoomType } from "@/api/v1/models/roomType.model";
 import { httpError } from "@/api/v1/utils/httpError";
 import httpResponse from "@/api/v1/utils/httpResponse";
 import { AuthRequest } from "@/api/v1/interfaces/auth";
@@ -25,6 +26,9 @@ export const createRoom = async (
     if (existingRoom) {
       throw new Error(`Room number ${roomData.roomNumber} already exists`);
     }
+
+    const roomType = await RoomType.findById(roomData.roomType).session(session);
+    roomData.basePrice = roomType?.basePrice ?? 0;
 
     const newRoom = new Room(roomData);
     await newRoom.save({ session });
@@ -131,6 +135,11 @@ export const updateRoom = async (
       if (existingRoom && existingRoom._id.toString() !== id) {
         throw new Error(`Another room already uses the number ${updateData.roomNumber}`);
       }
+    }
+
+    if (updateData.roomType) {
+      const roomType = await RoomType.findById(updateData.roomType).session(session);
+      updateData.basePrice = roomType?.basePrice ?? 0;
     }
 
     const updatedRoom = await Room.findByIdAndUpdate(id, updateData, {
@@ -305,7 +314,7 @@ export const getAvailableRooms = async (
       status: "Active",
       roomType,
       _id: { $nin: Array.from(busyRoomIds) },
-    }).populate("roomType", "name");
+    }).populate("roomType", "name basePrice");
 
     return res.status(200).json({
       success: true,
