@@ -1280,6 +1280,21 @@ export const updateBooking = async (req: Request, res: Response) => {
           if (!overallCheckIn || checkInDt < overallCheckIn) overallCheckIn = checkInDt;
           if (!overallCheckOut || checkOutDt > overallCheckOut) overallCheckOut = checkOutDt;
 
+          const typeAvailability = await checkRoomTypeAvailability(
+            new mongoose.Types.ObjectId(entry.roomTypeId),
+            checkInDt,
+            checkOutDt,
+            countNum,
+            existingBooking._id as mongoose.Types.ObjectId
+          );
+          if (!typeAvailability.isAvailable) {
+            await session.abortTransaction();
+            return res.status(400).json({
+              success: false,
+              message: typeAvailability.reason,
+            });
+          }
+
           for (let i = 0; i < countNum; i++) {
             validatedRooms.push({
               roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
