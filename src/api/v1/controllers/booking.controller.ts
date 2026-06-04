@@ -169,7 +169,7 @@ export const checkRoomTypeAvailability = async (
     return {
       isAvailable: false,
       availableCount,
-      reason: `Only ${availableCount} room(s) available for the selected dates (${requestedCount} requested, ${totalRooms} total active rooms found)`,
+      reason: `Only ${availableCount} room(s) available for the selected dates (${requestedCount} requested)`,
     };
   }
 
@@ -186,13 +186,18 @@ export const getRoomTypeAvailableCount = async (req: Request, res: Response) => 
     if (!roomTypeId || !checkIn || !checkOut) {
       return res.status(400).json({ success: false, message: "roomTypeId, checkIn, checkOut are required" });
     }
+
     const result = await checkRoomTypeAvailability(
       new mongoose.Types.ObjectId(roomTypeId),
       new Date(checkIn),
       new Date(checkOut),
       0
     );
-    return res.json({ success: true, data: { availableCount: result.availableCount } });
+
+    return res.json({
+      success: true,
+      data: { availableCount: result.availableCount },
+    });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
   }
