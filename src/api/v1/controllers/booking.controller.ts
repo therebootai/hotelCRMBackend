@@ -126,6 +126,48 @@ export const checkRoomAvailability = async (
   return { isAvailable: true };
 };
 
+export const checkRoomTypeAvailability = async (
+  roomTypeId: mongoose.Types.ObjectId,
+  checkInDate: Date,
+  checkOutDate: Date,
+  requestedCount: number,
+  excludeBookingId?: mongoose.Types.ObjectId
+): Promise<{ isAvailable: boolean; availableCount: number; reason?: string }> => {
+  const totalRooms = await Room.countDocuments({ roomType: roomTypeId, status: "Active" });
+
+  const matchStage: any = {
+    status: { $in: ["Pending", "Confirmed", "Checked-In"] },
+  };
+  if (excludeBookingId) {
+    matchStage._id = { $ne: excludeBookingId };
+  }
+
+  const bookedResult = await Booking.aggregate([
+    { $match: matchStage },
+    { $unwind: "$rooms" },
+    {
+      $match: {
+        "rooms.roomType": roomTypeId,
+        "rooms.checkInDate": { $lt: checkOutDate },
+        "rooms.checkOutDate": { $gt: checkInDate },
+      },
+    },
+    { $count: "count" },
+  ]);
+
+  const bookedCount = bookedResult[0]?.count || 0;
+  const availableCount = totalRooms - bookedCount;
+
+  if (requestedCount > availableCount) {
+    return {
+      isAvailable: false,
+      availableCount,
+      reason: `Only ${availableCount} room(s) of this type available for the selected dates (${requestedCount} requested)`,
+    };
+  }
+
+  return { isAvailable: true, availableCount };
+};
 
 export const calculateDateWisePricing = async (
   roomId: mongoose.Types.ObjectId,
