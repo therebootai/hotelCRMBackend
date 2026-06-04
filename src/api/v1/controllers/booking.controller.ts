@@ -851,6 +851,20 @@ export const createBooking = async (req: Request, res: Response) => {
           overallCheckOut = checkOutDt;
         }
 
+        const typeAvailability = await checkRoomTypeAvailability(
+          new mongoose.Types.ObjectId(entry.roomTypeId),
+          checkInDt,
+          checkOutDt,
+          countNum
+        );
+        if (!typeAvailability.isAvailable) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: typeAvailability.reason,
+          });
+        }
+
         for (let i = 0; i < countNum; i++) {
           validatedRooms.push({
             roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
