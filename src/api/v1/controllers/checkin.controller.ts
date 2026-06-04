@@ -14,6 +14,11 @@ import { sendNotificationToRole } from "../services/notification.service";
 import DayAccessPackage from "../models/accessPackage.model";
 import { TaxGst } from "../models/taxGst.model";
 
+interface IPopulatedRoomType {
+  _id: mongoose.Types.ObjectId;
+  basePrice: number;
+  name?: string;
+}
 
 export const processCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
   const mongoSession = await mongoose.startSession();
@@ -210,14 +215,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         if (!roomId) {
           throw new Error("All room slots must be assigned before check-in");
         }
-        const roomInfo = await Room.findById(roomId).session(mongoSession);
+        const roomInfo = await Room.findById(roomId).populate("roomType", "basePrice").session(mongoSession);
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
-          appliedPrice: sel.appliedPrice || sel.pricePerNight || roomInfo?.basePrice || 0,
+          originalPrice: sel.originalPrice || sel.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          appliedPrice: sel.appliedPrice || sel.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
           assignedAt: new Date(),
         });
         roomIds.push(roomId);
@@ -225,15 +230,15 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     } else {
       // Day Access: process room selections as flat-priced add-ons
       for (const sel of selections) {
-        const roomInfo = await Room.findById(sel.roomId || sel._id).session(mongoSession);
+        const roomInfo = await Room.findById(sel.roomId || sel._id).populate("roomType", "basePrice").session(mongoSession);
         const roomId = sel.roomId || sel._id;
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || roomInfo?.basePrice || 0,
-          appliedPrice: sel.appliedPrice || sel.originalPrice || roomInfo?.basePrice || 0,
+          originalPrice: sel.originalPrice || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          appliedPrice: sel.appliedPrice || sel.originalPrice || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
           assignedAt: new Date(),
         });
         roomIds.push(roomId);
@@ -834,7 +839,7 @@ export const getCheckInList = async (req: Request, res: Response) => {
       })
       .populate({
         path: "roomDetails.roomId",
-        select: "roomNumber status roomType basePrice"
+        select: "roomNumber status roomType"
       })
       .populate({
         path: "roomDetails.roomType",
@@ -958,13 +963,13 @@ export const extendStay = async (req: Request, res: Response) => {
       const isAlreadyAdded = checkIn.roomDetails.some(r => r.roomId.toString() === newRoomId);
 
       if (!isAlreadyAdded) {
-        const roomInfo = await Room.findById(newRoomId);
+        const roomInfo = await Room.findById(newRoomId).populate("roomType", "basePrice");
         checkIn.roomDetails.push({
           roomId: roomObjectId,
           roomType: roomInfo?.roomType as any,
           roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string,
-          originalPrice: roomInfo?.basePrice || 0,
-          appliedPrice: Number(appliedPrice) || roomInfo?.basePrice || 0,
+          originalPrice: (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          appliedPrice: Number(appliedPrice) || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
           assignedAt: new Date(),
         });
       }
@@ -1044,7 +1049,7 @@ export const getCheckInById = async (req: Request, res: Response) => {
       })
       .populate({
         path: "roomDetails.roomId",
-        select: "roomNumber status roomType basePrice floor wing"
+        select: "roomNumber status roomType floor wing"
       })
       .populate({
         path: "roomDetails.roomType",
@@ -1479,7 +1484,7 @@ export const roomChange = async (req: Request, res: Response) => {
       });
     }
 
-    const newRoom = await Room.findById(newRoomId).session(mongoSession);
+    const newRoom = await Room.findById(newRoomId).populate("roomType", "basePrice").session(mongoSession);
     if (!newRoom) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
@@ -1495,13 +1500,15 @@ export const roomChange = async (req: Request, res: Response) => {
       differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart))
     );
 
+    const newRoomBasePrice = (newRoom.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0;
+
     checkIn.roomDetails = [
       {
         roomId: new mongoose.Types.ObjectId(newRoomId),
         roomType: roomTypeId,
         roomNumber: newRoom.roomNumber,
-        originalPrice: newRoom.basePrice || 0,
-        appliedPrice: newRoom.basePrice || 0,
+        originalPrice: newRoomBasePrice,
+        appliedPrice: newRoomBasePrice,
         assignedAt: new Date(),
       },
     ];
@@ -1510,7 +1517,7 @@ export const roomChange = async (req: Request, res: Response) => {
       action: "Room Changed",
       performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
       timestamp: new Date(),
-      details: `Room changed from ${currentRoomDetail.roomNumber} to ${newRoom.roomNumber} (${currentRoomDetail.appliedPrice} → ${newRoom.basePrice})`,
+      details: `Room changed from ${currentRoomDetail.roomNumber} to ${newRoom.roomNumber} (${currentRoomDetail.appliedPrice} → ${newRoomBasePrice})`,
     });
 
     await checkIn.save({ session: mongoSession });
@@ -1544,7 +1551,7 @@ export const roomChange = async (req: Request, res: Response) => {
         checkInDate: effectiveDate ? new Date(effectiveDate) : bookingStart,
         checkOutDate: bookingEnd,
         nights: 0,
-        ratePerNight: newRoom.basePrice || 0,
+        ratePerNight: newRoomBasePrice,
         totalRoomCharge: 0,
         stayType: "Transferred" as const,
       };
@@ -1562,7 +1569,7 @@ export const roomChange = async (req: Request, res: Response) => {
         action: "Billing Updated on Room Change",
         performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
         timestamp: new Date(),
-        details: `Room changed: billing recalculated at ₹${newRoom.basePrice}/night`,
+        details: `Room changed: billing recalculated at ₹${newRoomBasePrice}/night`,
       });
 
       await billing.save({ session: mongoSession });

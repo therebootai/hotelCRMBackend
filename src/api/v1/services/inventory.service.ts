@@ -5,6 +5,12 @@ import { CheckIn } from "@/api/v1/models/checkin.model";
 import { MaintenanceBlock } from "@/api/v1/models/maintenanceBlock.model";
 import { RoomStatus, RoomStatusEnum } from "@/api/v1/models/roomStatus.model";
 
+interface IPopulatedRoomType {
+  _id: mongoose.Types.ObjectId;
+  basePrice: number;
+  name?: string;
+}
+
 // ==========================================
 // LAYER 1 — ROOM TYPE AVAILABILITY
 // ==========================================
@@ -119,7 +125,7 @@ export const allocateExactRoom = async (
     const checkin = await CheckIn.findById(checkinId).session(session);
     if (!checkin) throw new Error("Check-in record not found");
 
-    const room = await Room.findById(roomId).session(session);
+    const room = await Room.findById(roomId).populate("roomType", "basePrice").session(session);
     if (!room) throw new Error("Room not found");
 
     // Check conflict
@@ -161,8 +167,8 @@ export const allocateExactRoom = async (
         roomId: room._id as mongoose.Types.ObjectId,
         roomType: room.roomType,
         roomNumber: room.roomNumber,
-        originalPrice: room.basePrice,
-        appliedPrice: room.basePrice,
+        originalPrice: (room.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+        appliedPrice: (room.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
         assignedAt: new Date(),
         assignedBy: new mongoose.Types.ObjectId(assignedBy)
       });

@@ -219,8 +219,8 @@ export const getRateManagementGrid = async (
     // 1. Fetch all Active Rooms populated with their Room Type
     // We only need the ID, roomNumber, basePrice, and roomType info
     const rooms = await Room.find({ status: { $ne: "Blocked" } })
-      .populate("roomType", "name")
-      .select("roomNumber basePrice roomType")
+      .populate("roomType", "name basePrice")
+      .select("roomNumber roomType")
       .lean();
 
     // Group the rooms by category for the frontend UI
@@ -242,7 +242,7 @@ export const getRateManagementGrid = async (
       categoriesMap.get(typeId).rooms.push({
         id: room._id.toString(),
         roomNumber: room.roomNumber,
-        basePrice: room.basePrice,
+        basePrice: room.roomType.basePrice ?? 0,
       });
     });
 

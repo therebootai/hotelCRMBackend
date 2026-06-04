@@ -30,8 +30,8 @@ const RoomSchema = new Schema<IRoom>(
     maxChildren: { type: Number, required: true},
     extraBedAllowed: { type: Boolean, default: false },
     extraBedCharge: { type: Number, default: 0 },
-    
-    basePrice: { type: Number, required: true },
+
+    basePrice: { type: Number, default: 0 },
     discountPercentage: { type: Number, default: 0 },
     gstId: { type: Schema.Types.ObjectId, ref: "TaxGst" },
     
