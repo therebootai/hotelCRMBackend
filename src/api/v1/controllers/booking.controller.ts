@@ -176,6 +176,28 @@ export const checkRoomTypeAvailability = async (
   return { isAvailable: true, availableCount };
 };
 
+export const getRoomTypeAvailableCount = async (req: Request, res: Response) => {
+  try {
+    const { roomTypeId, checkIn, checkOut } = req.query as {
+      roomTypeId?: string;
+      checkIn?: string;
+      checkOut?: string;
+    };
+    if (!roomTypeId || !checkIn || !checkOut) {
+      return res.status(400).json({ success: false, message: "roomTypeId, checkIn, checkOut are required" });
+    }
+    const result = await checkRoomTypeAvailability(
+      new mongoose.Types.ObjectId(roomTypeId),
+      new Date(checkIn),
+      new Date(checkOut),
+      0
+    );
+    return res.json({ success: true, data: { availableCount: result.availableCount } });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
 export const calculateDateWisePricing = async (
   roomId: mongoose.Types.ObjectId,
   checkInDate: Date,
