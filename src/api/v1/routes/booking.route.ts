@@ -1,6 +1,7 @@
 import express, { Router } from "express";
 import {
   getAvailableRooms,
+  getRoomTypeAvailableCount,
   createBooking,
   getAllBookings,
   getBookingById,
@@ -26,6 +27,7 @@ router.use(protect);
 
 // Booking view endpoints (Accessible by booking managers or report viewers)
 router.get("/available", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getAvailableRooms);
+router.get("/room-type-count", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getRoomTypeAvailableCount);
 router.get("/overview", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getBookingOverview);
 router.get("/calendar", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getBookingCalendar);
 router.get("/list", requirePermission(["MANAGE_BOOKINGS", "VIEW_REPORTS"]), getAllBookings);
