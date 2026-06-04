@@ -135,6 +135,10 @@ export const checkRoomTypeAvailability = async (
 ): Promise<{ isAvailable: boolean; availableCount: number; reason?: string }> => {
   const totalRooms = await Room.countDocuments({ roomType: roomTypeId, status: "Active" });
 
+  if (totalRooms === 0) {
+    return { isAvailable: false, availableCount: 0, reason: "No active rooms of this type exist" };
+  }
+
   const matchStage: any = {
     status: { $in: ["Pending", "Confirmed", "Checked-In"] },
   };
@@ -147,7 +151,7 @@ export const checkRoomTypeAvailability = async (
     { $unwind: "$rooms" },
     {
       $match: {
-        "rooms.roomType": roomTypeId,
+        "rooms.roomType": new mongoose.Types.ObjectId(roomTypeId),
         "rooms.checkInDate": { $lt: checkOutDate },
         "rooms.checkOutDate": { $gt: checkInDate },
       },
@@ -155,7 +159,7 @@ export const checkRoomTypeAvailability = async (
     { $count: "count" },
   ]);
 
-  const bookedCount = bookedResult[0]?.count || 0;
+  const bookedCount = (bookedResult[0]?.count as number | undefined) ?? 0;
   const availableCount = totalRooms - bookedCount;
 
   if (requestedCount > availableCount) {
