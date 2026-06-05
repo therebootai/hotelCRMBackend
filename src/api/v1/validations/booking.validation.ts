@@ -86,9 +86,20 @@ export const createBookingSchema = z.object({
     // Tax/GST selected at booking time
     selectedTaxId: z.string().optional(),
 
+    status: z.enum([
+      "Pending",
+      "Confirmed",
+      "Checked-In",
+      "Checked-Out",
+      "Cancelled",
+      "No-Show",
+      "Hold"
+    ]).optional(),
+
     expiresAt: z.coerce.date().optional(),
     pickupRequired: z.boolean().default(false),
     specialRequests: z.string().max(500).optional(),
+    purposeOfVisit: z.string().optional(),
     internalNotes: z.string().optional(),
     vehicleDetails: z.array(z.any()).default([]),
     addons: z.array(
@@ -124,6 +135,7 @@ export const updateBookingSchema = z.object({
       "Checked-Out",
       "Cancelled",
       "No-Show",
+      "Hold"
     ]).optional(),
     bookingCategory: z.enum(["Room Stay", "Day Access", "Event", "Banquet"]).optional(),
     bookingType: z.enum(["Individual", "Corporate"]).optional(),
@@ -160,6 +172,7 @@ export const updateBookingSchema = z.object({
     adults: z.number().min(0).optional(),
     children: z.number().min(0).optional(),
     specialRequests: z.string().max(500).optional(),
+    purposeOfVisit: z.string().optional(),
     customerDetails: z.object({
       name: z.string().min(1).optional(),
       phone: z.string().min(10).optional(),

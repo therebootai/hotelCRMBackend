@@ -122,7 +122,8 @@ export interface IBooking extends Document {
     | "Checked-In"
     | "Checked-Out"
     | "Cancelled"
-    | "No-Show";
+    | "No-Show"
+    | "Hold";
 
   // Booking Source
   source:
@@ -178,6 +179,9 @@ export interface IBooking extends Document {
 
   // Special Requests
   specialRequests?: string;
+
+  // Purpose of Visit
+  purposeOfVisit?: string;
 
   // Activity Logs
   activityLogs: IActivityLog[];
@@ -286,6 +290,7 @@ const BookingSchema = new Schema<IBooking>(
         "Checked-Out",
         "Cancelled",
         "No-Show",
+        "Hold",
       ],
       default: "Pending",
     },
@@ -384,6 +389,9 @@ const BookingSchema = new Schema<IBooking>(
 
     // Special Requests
     specialRequests: { type: String },
+
+    // Purpose of Visit
+    purposeOfVisit: { type: String },
 
     // Activity Logs
     activityLogs: [

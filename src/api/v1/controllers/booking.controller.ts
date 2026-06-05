@@ -713,6 +713,8 @@ export const createBooking = async (req: Request, res: Response) => {
       corporateDetails,
       bookingCategory = "Room Stay",
       mealPlan,
+      status: reqStatus,
+      expiresAt,
       externalBookingId,
       estimatedArrivalTime,
       pickupRequired,
@@ -720,6 +722,7 @@ export const createBooking = async (req: Request, res: Response) => {
       preferences,
       internalNotes,
       specialRequests,
+      purposeOfVisit,
       selectedTaxId,
       addons = [],
     } = req.body;
@@ -939,11 +942,15 @@ export const createBooking = async (req: Request, res: Response) => {
       });
     }
 
-    let status: "Pending" | "Confirmed" | "Checked-In" = "Pending";
-    if (advanceAmount > 0 && advanceAmount >= totals.roomTotal * 0.1) {
+    let status: "Pending" | "Confirmed" | "Checked-In" | "Checked-Out" | "Cancelled" | "No-Show" | "Hold" = "Pending";
+    if (advanceAmount > 0) {
       status = "Confirmed";
-    } else if (bookingType === "Corporate" || advanceAmount > 0) {
-      status = "Confirmed";
+    } else if (reqStatus) {
+      status = reqStatus as any;
+    } else {
+      if (bookingType === "Corporate") {
+        status = "Confirmed";
+      }
     }
 
     // Resolve selected tax from tax-gst master
@@ -997,6 +1004,7 @@ export const createBooking = async (req: Request, res: Response) => {
           status: status ?? (advanceAmount > 0 ? "Confirmed" : "Pending"),
           source,
           externalBookingId,
+          expiresAt: (status === "Hold" || expiresAt) ? expiresAt : undefined,
           paymentStatus: advanceAmount > 0 ? "Partial" : "Pending",
           advanceAmount,
           pricingSummary: {
@@ -1016,6 +1024,7 @@ export const createBooking = async (req: Request, res: Response) => {
           preferences,
           internalNotes,
           specialRequests,
+          purposeOfVisit,
           activityLogs: [
             {
               action: "Booking Created",
@@ -1220,6 +1229,9 @@ export const updateBooking = async (req: Request, res: Response) => {
       preferences,
       internalNotes,
       specialRequests,
+      expiresAt,
+      selectedTaxId,
+      purposeOfVisit,
     } = req.body;
 
     const existingBooking = await Booking.findById(id);
@@ -1375,16 +1387,29 @@ export const updateBooking = async (req: Request, res: Response) => {
       existingBooking.totalRooms = totals.totalRooms;
     }
 
-    if (status && status !== existingBooking.status) {
+    let targetStatus = status;
+    if (advanceAmount && advanceAmount > 0 && (existingBooking.status === "Pending" || existingBooking.status === "Hold" || status === "Pending" || status === "Hold")) {
+      targetStatus = "Confirmed";
+    }
+
+    if (targetStatus && targetStatus !== existingBooking.status) {
       await transitionBookingState(
         existingBooking._id,
-        status as any,
+        targetStatus as any,
         {
           userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
           notes: "Updated booking status via updateBooking"
         },
         { session }
       );
+    }
+
+    if (req.body.hasOwnProperty("expiresAt")) {
+      existingBooking.expiresAt = expiresAt ? new Date(expiresAt) : undefined;
+    }
+    // If status is updated to Confirmed/Checked-In, clear hold expiry
+    if (targetStatus && targetStatus !== "Hold") {
+      existingBooking.expiresAt = undefined;
     }
 
     if (source) existingBooking.source = source;
@@ -1394,21 +1419,38 @@ export const updateBooking = async (req: Request, res: Response) => {
     if (preferences) existingBooking.preferences = preferences;
     if (internalNotes) existingBooking.internalNotes = internalNotes;
     if (specialRequests) existingBooking.specialRequests = specialRequests;
+    if (req.body.hasOwnProperty("purposeOfVisit")) {
+      existingBooking.purposeOfVisit = purposeOfVisit;
+    }
     if (addons) existingBooking.addons = addons;
   
-    if (totals) {
-      const existingTaxPercent = existingBooking.pricingSummary.taxPercentage || 12;
-      const taxAmount = Math.round(totals.roomTotal * existingTaxPercent) / 100;
-      const addonTotal = Array.isArray(existingBooking.addons) 
-        ? existingBooking.addons.reduce((sum: number, a: any) => sum + (Number(a.total) || 0), 0)
+    let resolvedTaxPercent = existingBooking.pricingSummary.taxPercentage || 12;
+    if (selectedTaxId) {
+      try {
+        const taxGst = await TaxGst.findById(selectedTaxId).session(session);
+        if (taxGst && taxGst.isActive) {
+          resolvedTaxPercent = taxGst.percentage;
+          existingBooking.taxGstId = taxGst._id as mongoose.Types.ObjectId;
+        }
+      } catch (err) {
+        console.error("Error resolving selectedTaxId in updateBooking:", err);
+      }
+    }
+
+    if (totals || selectedTaxId || addons) {
+      const roomTotal = totals ? totals.roomTotal : existingBooking.pricingSummary.roomTotal;
+      const taxAmount = Math.round(roomTotal * resolvedTaxPercent) / 100;
+      const currentAddons = addons || existingBooking.addons || [];
+      const addonTotal = Array.isArray(currentAddons) 
+        ? currentAddons.reduce((sum: number, a: any) => sum + (Number(a.total) || 0), 0)
         : 0;
       
-      const grandTotal = totals.roomTotal + addonTotal + taxAmount;
+      const grandTotal = roomTotal + addonTotal + taxAmount;
       existingBooking.pricingSummary = {
         ...existingBooking.pricingSummary,
-        roomTotal: totals.roomTotal,
+        roomTotal,
         taxAmount,
-        taxPercentage: existingTaxPercent,
+        taxPercentage: resolvedTaxPercent,
         grandTotal,
         dueAmount: grandTotal - (existingBooking.pricingSummary.paidAmount || 0),
       };
@@ -1439,7 +1481,7 @@ export const updateBooking = async (req: Request, res: Response) => {
         paymentMode,
         (req as any).user?._id
       );
-    } else if (totals) {
+    } else if (totals || selectedTaxId || addons) {
       // Recalculate paymentStatus based on updated totals even if no new advance payment
       existingBooking.paymentStatus =
         existingBooking.pricingSummary.dueAmount <= 0

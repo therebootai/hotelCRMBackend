@@ -12,15 +12,17 @@ export type BookingStatus =
   | "Checked-In"
   | "Checked-Out"
   | "Cancelled"
-  | "No-Show";
+  | "No-Show"
+  | "Hold";
 
 const ALLOWED_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
-  Pending: ["Confirmed", "Cancelled", "No-Show"],
-  Confirmed: ["Checked-In", "Cancelled", "No-Show"],
+  Pending: ["Confirmed", "Cancelled", "No-Show", "Hold"],
+  Confirmed: ["Checked-In", "Cancelled", "No-Show", "Hold"],
   "Checked-In": ["Checked-Out"],
   "Checked-Out": [],
   Cancelled: [],
   "No-Show": [],
+  Hold: ["Confirmed", "Cancelled", "Pending"],
 };
 
 export const transitionBookingState = async (
