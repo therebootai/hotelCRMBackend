@@ -126,6 +126,82 @@ export const checkRoomAvailability = async (
   return { isAvailable: true };
 };
 
+export const checkRoomTypeAvailability = async (
+  roomTypeId: mongoose.Types.ObjectId,
+  checkInDate: Date,
+  checkOutDate: Date,
+  requestedCount: number,
+  excludeBookingId?: mongoose.Types.ObjectId
+): Promise<{ isAvailable: boolean; availableCount: number; reason?: string }> => {
+  const totalRooms = await Room.countDocuments({
+    roomType: roomTypeId,
+    status: { $nin: ["Maintenance", "Blocked"] },
+  });
+
+  if (totalRooms === 0) {
+    return { isAvailable: false, availableCount: 0, reason: "No bookable rooms of this type exist" };
+  }
+
+  const matchStage: any = {
+    status: { $in: ["Pending", "Confirmed", "Checked-In"] },
+  };
+  if (excludeBookingId) {
+    matchStage._id = { $ne: excludeBookingId };
+  }
+
+  const bookedResult = await Booking.aggregate([
+    { $match: matchStage },
+    { $unwind: "$rooms" },
+    {
+      $match: {
+        "rooms.roomType": new mongoose.Types.ObjectId(roomTypeId),
+        "rooms.checkInDate": { $lt: checkOutDate },
+        "rooms.checkOutDate": { $gt: checkInDate },
+      },
+    },
+    { $count: "count" },
+  ]);
+
+  const bookedCount = (bookedResult[0]?.count as number | undefined) ?? 0;
+  const availableCount = Math.max(0, totalRooms - bookedCount);
+
+  if (requestedCount > availableCount) {
+    return {
+      isAvailable: false,
+      availableCount,
+      reason: `Only ${availableCount} room(s) available for the selected dates (${requestedCount} requested)`,
+    };
+  }
+
+  return { isAvailable: true, availableCount };
+};
+
+export const getRoomTypeAvailableCount = async (req: Request, res: Response) => {
+  try {
+    const { roomTypeId, checkIn, checkOut } = req.query as {
+      roomTypeId?: string;
+      checkIn?: string;
+      checkOut?: string;
+    };
+    if (!roomTypeId || !checkIn || !checkOut) {
+      return res.status(400).json({ success: false, message: "roomTypeId, checkIn, checkOut are required" });
+    }
+
+    const result = await checkRoomTypeAvailability(
+      new mongoose.Types.ObjectId(roomTypeId),
+      new Date(checkIn),
+      new Date(checkOut),
+      0
+    );
+
+    return res.json({
+      success: true,
+      data: { availableCount: result.availableCount },
+    });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
 
 export const calculateDateWisePricing = async (
   roomId: mongoose.Types.ObjectId,
@@ -805,6 +881,20 @@ export const createBooking = async (req: Request, res: Response) => {
           overallCheckOut = checkOutDt;
         }
 
+        const typeAvailability = await checkRoomTypeAvailability(
+          new mongoose.Types.ObjectId(entry.roomTypeId),
+          checkInDt,
+          checkOutDt,
+          countNum
+        );
+        if (!typeAvailability.isAvailable) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: typeAvailability.reason,
+          });
+        }
+
         for (let i = 0; i < countNum; i++) {
           validatedRooms.push({
             roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
@@ -1219,6 +1309,21 @@ export const updateBooking = async (req: Request, res: Response) => {
 
           if (!overallCheckIn || checkInDt < overallCheckIn) overallCheckIn = checkInDt;
           if (!overallCheckOut || checkOutDt > overallCheckOut) overallCheckOut = checkOutDt;
+
+          const typeAvailability = await checkRoomTypeAvailability(
+            new mongoose.Types.ObjectId(entry.roomTypeId),
+            checkInDt,
+            checkOutDt,
+            countNum,
+            existingBooking._id as mongoose.Types.ObjectId
+          );
+          if (!typeAvailability.isAvailable) {
+            await session.abortTransaction();
+            return res.status(400).json({
+              success: false,
+              message: typeAvailability.reason,
+            });
+          }
 
           for (let i = 0; i < countNum; i++) {
             validatedRooms.push({

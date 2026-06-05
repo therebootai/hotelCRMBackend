@@ -517,9 +517,11 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     } else {
       billing.checkInId = newCheckIn._id;
 
-      const existingRoomIds = billing.roomChargesBreakdown.map(r => r.roomId.toString());
+      const existingRoomIds = billing.roomChargesBreakdown
+        .filter((r: any) => r.roomId != null)
+        .map((r: any) => r.roomId.toString());
       const newRoomCharges = roomChargesBreakdown.filter(
-        r => !existingRoomIds.includes(r.roomId.toString())
+        (r: any) => r.roomId == null || !existingRoomIds.includes(r.roomId.toString())
       );
 
       if (newRoomCharges.length > 0) {
