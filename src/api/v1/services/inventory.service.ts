@@ -380,7 +380,7 @@ export const releaseExpiredHolds = async (): Promise<number> => {
   session.startTransaction();
   try {
     const expiredBookings = await Booking.find({
-      status: "Pending",
+      status: "Hold",
       expiresAt: { $lt: new Date() }
     }).session(session);
 
