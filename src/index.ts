@@ -26,16 +26,12 @@ import pricingRuleRoutes from "@/api/v1/routes/pricingRule.route";
 import bookingRoutes from "@/api/v1/routes/booking.route";
 import checkinRoutes from "@/api/v1/routes/checkin.route";
 import facilityRoutes from "@/api/v1/routes/facility.route";
-import extraServiceRoute from "@/api/v1/routes/extraService.route"
-import billingRoute from "@/api/v1/routes/billing.route"
+import extraServiceRoute from "@/api/v1/routes/extraService.route";
+import billingRoute from "@/api/v1/routes/billing.route";
 import accessPackageRoutes from "@/api/v1/routes/accessPackage.route";
 import customerRoutes from "@/api/v1/routes/customer.route";
 import notificationRoutes from "./api/v1/routes/notification.route";
 import reportingRoutes from "./api/v1/routes/reporting.route";
-
-
-
-
 
 const app = express();
 
@@ -43,9 +39,14 @@ app.use(
   cors({
     origin: (origin, callback) => {
       const allowedOrigins = [
-        "https://hotelcrmproto.netlify.app"
+        "https://hotelcrmproto.netlify.app",
+        "https://gallamart.com",
       ];
-      if (!origin || /^http:\/\/localhost:\d+$/.test(origin) || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        /^http:\/\/localhost:\d+$/.test(origin) ||
+        allowedOrigins.includes(origin)
+      ) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
@@ -79,16 +80,13 @@ app.use("/api/v1/rooms", roomRoutes);
 app.use("/api/v1/pricing-rules", pricingRuleRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/checkin", checkinRoutes);
-app.use("/api/v1/facilities",facilityRoutes)
-app.use("/api/v1/extra-services",extraServiceRoute)
-app.use("/api/v1/billing",billingRoute)
+app.use("/api/v1/facilities", facilityRoutes);
+app.use("/api/v1/extra-services", extraServiceRoute);
+app.use("/api/v1/billing", billingRoute);
 app.use("/api/v1/access-packages", accessPackageRoutes);
 app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/reports", reportingRoutes);
-
-
-
 
 //404 handller
 app.use((req: Request, _: Response, next: NextFunction) => {
