@@ -1153,6 +1153,7 @@ export const getAllBookings = async (req: Request, res: Response) => {
         .populate("customerId", "name phone email")
         .populate("rooms.roomType", "name")
         .populate("rooms.roomId", "roomNumber")
+        .populate("accessPackageId")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(Number(limit)),
@@ -1182,7 +1183,8 @@ export const getBookingById = async (req: Request, res: Response) => {
       .populate("customerId", "name phone email")
       .populate("rooms.roomType", "name")
       .populate("rooms.roomId", "roomNumber")
-      .populate("taxGstId", "name percentage type");
+      .populate("taxGstId", "name percentage type")
+      .populate("accessPackageId");
 
     if (!booking) {
       return res.status(404).json({
