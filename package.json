@@ -7,7 +7,7 @@
     "dev": "nodemon --ext ts,json --exec tsx --env-file=.env src/index.ts",
     "type-check": "tsc --noEmit",
     "build": "tsc",
-    "preview": "tsx src/index.ts",
+    "preview": "tsx --env-file=.env src/index.ts",
     "start": "node --env-file=.env dist/index.js"
   },
   "keywords": [],
