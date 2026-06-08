@@ -88,15 +88,19 @@ export const checkRoomAvailability = async (
     return { isAvailable: false, reason: "Room is blocked" };
   }
 
+  const now = new Date();
   const bookingQuery: any = {
-    status: { $in: ["Pending", "Confirmed", "Checked-In"] },
-    "rooms.roomId": roomId,
     $or: [
-      {
-        "rooms.checkInDate": { $lt: checkOutDate },
-        "rooms.checkOutDate": { $gt: checkInDate },
-      },
+      { status: { $in: ["Pending", "Confirmed", "Checked-In"] } },
+      { status: "Hold", $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gte: now } }] },
     ],
+    rooms: {
+      $elemMatch: {
+        roomId: new mongoose.Types.ObjectId(roomId as any),
+        checkInDate: { $lt: checkOutDate },
+        checkOutDate: { $gt: checkInDate },
+      },
+    },
   };
 
   if (excludeBookingId) {
@@ -142,8 +146,12 @@ export const checkRoomTypeAvailability = async (
     return { isAvailable: false, availableCount: 0, reason: "No bookable rooms of this type exist" };
   }
 
+  const now = new Date();
   const matchStage: any = {
-    status: { $in: ["Pending", "Confirmed", "Checked-In"] },
+    $or: [
+      { status: { $in: ["Pending", "Confirmed", "Checked-In"] } },
+      { status: "Hold", $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gte: now } }] },
+    ],
   };
   if (excludeBookingId) {
     matchStage._id = { $ne: excludeBookingId };
@@ -613,15 +621,39 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
       rooms = rooms.filter((r: any) => r.nearLift === true);
     }
 
+    // Pre-compute type-level available counts once per unique room type
+    const roomTypeIds = [...new Set(rooms.map((r: any) => r.roomType?._id?.toString()).filter(Boolean))];
+    const typeAvailMap = new Map<string, number>();
+    await Promise.all(
+      roomTypeIds.map(async (rtId: string) => {
+        const ta = await checkRoomTypeAvailability(
+          new mongoose.Types.ObjectId(rtId),
+          checkInDate,
+          checkOutDate,
+          0
+        );
+        typeAvailMap.set(rtId, ta.availableCount);
+      })
+    );
+
     // Calculate availability and pricing for each room
     const availabilityResults: IAvailabilityResult[] = await Promise.all(
       rooms.map(async (room: any) => {
-        // Check room availability
+        // Check room-specific availability (specific-roomId conflicts)
         const availability = await checkRoomAvailability(
           room._id,
           checkInDate,
           checkOutDate
         );
+
+        // Also enforce type-level slot count (catches type-based bookings with no roomId)
+        const typeAvailCount = typeAvailMap.get(room.roomType?._id?.toString()) ?? 0;
+        const isAvailable = availability.isAvailable && typeAvailCount > 0;
+        const unavailableReason = !availability.isAvailable
+          ? availability.reason
+          : typeAvailCount === 0
+          ? "No remaining slots for this room type on these dates"
+          : undefined;
 
         // Calculate dynamic pricing
         const roomTypeBasePrice = (room.roomType as IPopulatedRoomType | null)?.basePrice ?? 0;
@@ -662,8 +694,8 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
             totalPrice: pricing.totalPrice,
             amenities: room.amenities,
           },
-          isAvailable: availability.isAvailable,
-          unavailableReason: availability.reason,
+          isAvailable,
+          unavailableReason,
         };
       })
     );

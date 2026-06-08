@@ -215,6 +215,36 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         if (!roomId) {
           throw new Error("All room slots must be assigned before check-in");
         }
+
+        // Prevent assigning a room already occupied by an active check-in
+        const occupiedCheckIn = await CheckIn.findOne({
+          status: "Active",
+          "roomDetails.roomId": new mongoose.Types.ObjectId(roomId),
+          checkInTime: { $lt: checkOutTimeVal },
+          expectedCheckOutTime: { $gt: checkInTimeVal },
+        }).session(mongoSession);
+
+        if (occupiedCheckIn) {
+          throw new Error(`Room is already occupied by another active check-in (${occupiedCheckIn.checkInId})`);
+        }
+
+        // Prevent assigning a room already booked by a different confirmed booking for overlapping dates
+        const conflictingBooking = await Booking.findOne({
+          _id: { $ne: booking._id },
+          status: { $in: ["Confirmed", "Checked-In"] },
+          rooms: {
+            $elemMatch: {
+              roomId: new mongoose.Types.ObjectId(roomId),
+              checkInDate: { $lt: checkOutTimeVal },
+              checkOutDate: { $gt: checkInTimeVal },
+            },
+          },
+        }).session(mongoSession);
+
+        if (conflictingBooking) {
+          throw new Error(`Room is already assigned to another booking (${conflictingBooking.bookingId}) for these dates`);
+        }
+
         const roomInfo = await Room.findById(roomId).populate("roomType", "basePrice").session(mongoSession);
 
         roomDetails.push({
