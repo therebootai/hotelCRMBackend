@@ -53,7 +53,7 @@ export const getAllRooms = async (
   next: NextFunction,
 ) => {
   try {
-    const { page = "1", limit = "10", status, roomType, building } = req.query;
+    const { page = "1", limit = "10", status, roomType, building, availableOnly } = req.query;
 
     const pageNumber = parseInt(page as string, 10);
     const limitNumber = parseInt(limit as string, 10);
@@ -63,6 +63,21 @@ export const getAllRooms = async (
     if (status) filter.status = status;
     if (roomType) filter.roomType = roomType;
     if (building) filter.building = building;
+
+    if (availableOnly === 'true') {
+      const activeCheckIns = await CheckIn.find({ status: "Active" }).select("roomDetails.roomId");
+      const occupiedRoomIds = new Set<string>();
+      activeCheckIns.forEach(ci => {
+        if (ci.roomDetails) {
+          ci.roomDetails.forEach(rd => {
+            if (rd.roomId) occupiedRoomIds.add(rd.roomId.toString());
+          });
+        }
+      });
+      if (occupiedRoomIds.size > 0) {
+        filter._id = { $nin: Array.from(occupiedRoomIds).map(id => new mongoose.Types.ObjectId(id)) };
+      }
+    }
 
     // Fetch data and total count concurrently for better performance
     const [rooms, totalCount] = await Promise.all([
