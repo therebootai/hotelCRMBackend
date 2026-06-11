@@ -418,6 +418,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       liabilityAccepted: true,
       termsAcceptedAt: new Date(),
       packageDetails: isDayAccess ? packageDetails : undefined,
+      corporateCheckInDetails: checkInType === "Corporate" ? parsedCorporateData : undefined,
       documents: processedDocuments,
       verificationChecklist: {
         primaryGuestVerified: guestList.some((g: any) => g.isPrimary && g.name),
