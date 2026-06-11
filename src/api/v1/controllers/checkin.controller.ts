@@ -108,6 +108,40 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
+    // Process Dynamic Documents
+    const dynamicFiles: UploadedFile[] = [];
+    if (files.dynamicDocFiles) {
+      if (Array.isArray(files.dynamicDocFiles)) {
+        dynamicFiles.push(...files.dynamicDocFiles);
+      } else {
+        dynamicFiles.push(files.dynamicDocFiles as UploadedFile);
+      }
+    }
+
+    const dynamicDocTypes: string[] = req.body.dynamicDocTypes 
+      ? JSON.parse(req.body.dynamicDocTypes)
+      : [];
+
+    const processedDocuments = [];
+    for (let i = 0; i < dynamicFiles.length; i++) {
+      const file = dynamicFiles[i];
+      const type = dynamicDocTypes[i] || "Other";
+      try {
+        const result = await uploadFile(file.tempFilePath, "checkin-documents", file.mimetype);
+        processedDocuments.push({
+          type,
+          file: {
+            public_id: result.public_id,
+            secure_url: result.secure_url,
+          },
+          uploadedAt: new Date(),
+          uploadedBy: (req as any).user?._id,
+        });
+      } catch (uploadErr) {
+        console.error("Dynamic doc upload failed:", uploadErr);
+      }
+    }
+
     const booking = await Booking.findById(bookingId).session(mongoSession);
     if (!booking) {
       throw new Error("Booking not found");
@@ -384,6 +418,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       liabilityAccepted: true,
       termsAcceptedAt: new Date(),
       packageDetails: isDayAccess ? packageDetails : undefined,
+      documents: processedDocuments,
       verificationChecklist: {
         primaryGuestVerified: guestList.some((g: any) => g.isPrimary && g.name),
         idUploaded: guestList.some((g: any) => g.idDocument?.secure_url),
