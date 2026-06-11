@@ -395,7 +395,8 @@ export const getBillPreview = async (req: Request, res: Response) => {
 
         isUpdated: true,
         primaryGuest: primaryGuest ? { name: primaryGuest.name, mobileNo: primaryGuest.mobileNo } : null,
-        taxGstId: (checkInData.bookingId as any)?.taxGstId || null
+        taxGstId: (checkInData.bookingId as any)?.taxGstId || null,
+        checkoutVerification: checkInData.checkoutVerification || null
       };
 
       return res.status(200).json({
@@ -421,7 +422,8 @@ export const getBillPreview = async (req: Request, res: Response) => {
       paidAmount: 0,
       primaryGuest: primaryGuest ? { name: primaryGuest.name, mobileNo: primaryGuest.mobileNo } : null,
       taxPercentage: storedTaxPercent,
-      taxGstId: storedTaxGstId
+      taxGstId: storedTaxGstId,
+      checkoutVerification: checkInData.checkoutVerification || null
     };
 
     res.status(200).json({
