@@ -30,6 +30,7 @@ export const processCheckout = async (req: Request, res: Response) => {
       notes,
       isCheckout,
       payment,
+      checkoutVerification,
     } = req.body;
 
     const checkInData = await CheckIn.findById(checkInId).session(session);
@@ -230,6 +231,13 @@ export const processCheckout = async (req: Request, res: Response) => {
     checkInData.status = "Checked-Out";
     checkInData.actualCheckOutTime = new Date();
     checkInData.isBilled = true;
+    if (checkoutVerification) {
+      checkInData.checkoutVerification = {
+        ...checkoutVerification,
+        verifiedAt: new Date(),
+        verifiedBy: (req as any).user?._id,
+      };
+    }
     await checkInData.save({ session });
 
     if (checkInData.bookingId) {
