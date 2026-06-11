@@ -187,6 +187,12 @@ export const processCheckout = async (req: Request, res: Response) => {
 
     if (!isCheckout) {
       checkInData.isBilled = true;
+      if (checkoutVerification) {
+        checkInData.checkoutVerification = {
+          ...checkInData.checkoutVerification,
+          ...checkoutVerification,
+        };
+      }
       await checkInData.save({ session });
       await session.commitTransaction();
       session.endSession();

@@ -258,6 +258,8 @@ export interface ICheckIn extends Document {
     damageAmount: number;
     damageRemarks: string;
     staffNotes: string;
+    departmentsVerified?: boolean;
+    step?: number;
     verifiedAt?: Date;
     verifiedBy?: mongoose.Types.ObjectId;
   };
@@ -529,6 +531,8 @@ const CheckInSchema = new Schema<ICheckIn>(
       damageAmount: { type: Number, default: 0 },
       damageRemarks: { type: String, default: "" },
       staffNotes: { type: String, default: "" },
+      departmentsVerified: { type: Boolean, default: false },
+      step: { type: Number, default: 1 },
       verifiedAt: { type: Date },
       verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
