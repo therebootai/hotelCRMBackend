@@ -1174,7 +1174,13 @@ export const getAllBookings = async (req: Request, res: Response) => {
       };
     }
 
-    if (status) filter.status = status;
+    if (status) {
+      if ((status as string).includes(",")) {
+        filter.status = { $in: (status as string).split(",") };
+      } else {
+        filter.status = status;
+      }
+    }
     if (bookingType) filter.bookingType = bookingType;
     if (bookingCategory) filter.bookingCategory = bookingCategory;
     if (source) filter.source = source;
