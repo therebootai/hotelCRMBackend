@@ -76,6 +76,24 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     }
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
 
+    const mobileNumbers = parsedGuests.map((g: any) => g.mobileNo?.trim()).filter(Boolean);
+    const idNumbers = parsedGuests.map((g: any) => g.idNumber?.trim()).filter(Boolean);
+
+    if (mobileNumbers.length > 0 || idNumbers.length > 0) {
+      const orConditions: any[] = [];
+      if (mobileNumbers.length > 0) orConditions.push({ "guests.mobileNo": { $in: mobileNumbers } });
+      if (idNumbers.length > 0) orConditions.push({ "guests.idNumber": { $in: idNumbers } });
+
+      const existingCheckIn = await CheckIn.findOne({
+        status: "Active",
+        $or: orConditions
+      }).session(mongoSession);
+
+      if (existingCheckIn) {
+        throw new Error("One or more guests are already checked in. Please check them out before creating a new check-in.");
+      }
+    }
+
     for (let i = 0; i < guestDocFiles.length; i++) {
       const file = guestDocFiles[i];
       const guestIndex = guestDocIndices[i] ?? i;
