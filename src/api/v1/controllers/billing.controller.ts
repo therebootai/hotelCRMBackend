@@ -188,10 +188,9 @@ export const processCheckout = async (req: Request, res: Response) => {
     if (!isCheckout) {
       checkInData.isBilled = true;
       if (checkoutVerification) {
-        checkInData.checkoutVerification = {
-          ...checkInData.checkoutVerification,
-          ...checkoutVerification,
-        };
+        for (const [key, value] of Object.entries(checkoutVerification)) {
+          checkInData.set(`checkoutVerification.${key}`, value);
+        }
       }
       await checkInData.save({ session });
       await session.commitTransaction();
@@ -238,11 +237,11 @@ export const processCheckout = async (req: Request, res: Response) => {
     checkInData.actualCheckOutTime = new Date();
     checkInData.isBilled = true;
     if (checkoutVerification) {
-      checkInData.checkoutVerification = {
-        ...checkoutVerification,
-        verifiedAt: new Date(),
-        verifiedBy: (req as any).user?._id,
-      };
+      for (const [key, value] of Object.entries(checkoutVerification)) {
+        checkInData.set(`checkoutVerification.${key}`, value);
+      }
+      checkInData.set("checkoutVerification.verifiedAt", new Date());
+      checkInData.set("checkoutVerification.verifiedBy", (req as any).user?._id);
     }
     await checkInData.save({ session });
 
