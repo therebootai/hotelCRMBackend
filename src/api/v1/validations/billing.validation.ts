@@ -87,6 +87,18 @@ export const processCheckoutSchema = z.object({
       method: z.enum(["Cash", "UPI", "Card", "Bank Transfer", "Wallet", "Online"]),
       note: z.string().optional(),
     }).optional(),
+    checkoutVerification: z.object({
+      guestVacated: z.boolean(),
+      keyReturned: z.boolean(),
+      roomChecked: z.boolean(),
+      noDamage: z.boolean(),
+      damageFound: z.boolean(),
+      damageAmount: z.number(),
+      damageRemarks: z.string().optional(),
+      staffNotes: z.string().optional(),
+      departmentsVerified: z.boolean().optional(),
+      step: z.number().optional(),
+    }).optional(),
   }),
 });
 

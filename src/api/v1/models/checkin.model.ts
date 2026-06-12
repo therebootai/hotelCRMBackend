@@ -248,6 +248,22 @@ export interface ICheckIn extends Document {
     roomAssigned: boolean;
   };
 
+  // Checkout Verification Checklist
+  checkoutVerification?: {
+    guestVacated: boolean;
+    keyReturned: boolean;
+    roomChecked: boolean;
+    noDamage: boolean;
+    damageFound: boolean;
+    damageAmount: number;
+    damageRemarks: string;
+    staffNotes: string;
+    departmentsVerified?: boolean;
+    step?: number;
+    verifiedAt?: Date;
+    verifiedBy?: mongoose.Types.ObjectId;
+  };
+
   // Check-in Progress (Step-based)
   currentStep: number;
   completedSteps: number[];
@@ -503,6 +519,22 @@ const CheckInSchema = new Schema<ICheckIn>(
       grcGenerated: { type: Boolean, default: false },
       paymentCollected: { type: Boolean, default: false },
       roomAssigned: { type: Boolean, default: false },
+    },
+
+    // Checkout Verification Checklist
+    checkoutVerification: {
+      guestVacated: { type: Boolean, default: false },
+      keyReturned: { type: Boolean, default: false },
+      roomChecked: { type: Boolean, default: false },
+      noDamage: { type: Boolean, default: false },
+      damageFound: { type: Boolean, default: false },
+      damageAmount: { type: Number, default: 0 },
+      damageRemarks: { type: String, default: "" },
+      staffNotes: { type: String, default: "" },
+      departmentsVerified: { type: Boolean, default: false },
+      step: { type: Number, default: 1 },
+      verifiedAt: { type: Date },
+      verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
 
     // Check-in Progress (Step-based)

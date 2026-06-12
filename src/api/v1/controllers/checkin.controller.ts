@@ -76,6 +76,24 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     }
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
 
+    const mobileNumbers = parsedGuests.map((g: any) => g.mobileNo?.trim()).filter(Boolean);
+    const idNumbers = parsedGuests.map((g: any) => g.idNumber?.trim()).filter(Boolean);
+
+    if (mobileNumbers.length > 0 || idNumbers.length > 0) {
+      const orConditions: any[] = [];
+      if (mobileNumbers.length > 0) orConditions.push({ "guests.mobileNo": { $in: mobileNumbers } });
+      if (idNumbers.length > 0) orConditions.push({ "guests.idNumber": { $in: idNumbers } });
+
+      const existingCheckIn = await CheckIn.findOne({
+        status: "Active",
+        $or: orConditions
+      }).session(mongoSession);
+
+      if (existingCheckIn) {
+        throw new Error("One or more guests are already checked in. Please check them out before creating a new check-in.");
+      }
+    }
+
     for (let i = 0; i < guestDocFiles.length; i++) {
       const file = guestDocFiles[i];
       const guestIndex = guestDocIndices[i] ?? i;
@@ -108,9 +126,57 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
-    const booking = await Booking.findById(bookingId).session(mongoSession);
+    // Process Dynamic Documents
+    const dynamicFiles: UploadedFile[] = [];
+    if (files.dynamicDocFiles) {
+      if (Array.isArray(files.dynamicDocFiles)) {
+        dynamicFiles.push(...files.dynamicDocFiles);
+      } else {
+        dynamicFiles.push(files.dynamicDocFiles as UploadedFile);
+      }
+    }
+
+    const dynamicDocTypes: string[] = req.body.dynamicDocTypes 
+      ? JSON.parse(req.body.dynamicDocTypes)
+      : [];
+
+    const processedDocuments = [];
+    for (let i = 0; i < dynamicFiles.length; i++) {
+      const file = dynamicFiles[i];
+      const type = dynamicDocTypes[i] || "Other";
+      try {
+        const result = await uploadFile(file.tempFilePath, "checkin-documents", file.mimetype);
+        processedDocuments.push({
+          type,
+          file: {
+            public_id: result.public_id,
+            secure_url: result.secure_url,
+          },
+          uploadedAt: new Date(),
+          uploadedBy: (req as any).user?._id,
+        });
+      } catch (uploadErr) {
+        console.error("Dynamic doc upload failed:", uploadErr);
+      }
+    }
+
+    let booking = await Booking.findById(bookingId).session(mongoSession);
     if (!booking) {
-      throw new Error("Booking not found");
+      // No existing booking; create a minimal placeholder to allow check‑in without prior reservation
+      booking = new Booking({
+        // Populate required fields with defaults; adjust as needed for your business logic
+        customer: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        bookingCategory: "Walk‑In",
+        rooms: [],
+        pricingSummary: {
+          grandTotal: 0,
+          taxAmount: 0,
+          taxPercentage: 0,
+          roomTotal: 0,
+          dueAmount: 0,
+        },
+      } as any);
+      await booking.save({ session: mongoSession });
     }
 
     let selections = [];
@@ -384,6 +450,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       liabilityAccepted: true,
       termsAcceptedAt: new Date(),
       packageDetails: isDayAccess ? packageDetails : undefined,
+      corporateCheckInDetails: checkInType === "Corporate" ? parsedCorporateData : undefined,
+      documents: processedDocuments,
       verificationChecklist: {
         primaryGuestVerified: guestList.some((g: any) => g.isPrimary && g.name),
         idUploaded: guestList.some((g: any) => g.idDocument?.secure_url),
