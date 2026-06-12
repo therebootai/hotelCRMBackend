@@ -169,30 +169,16 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
-    let booking = await Booking.findById(bookingId).session(mongoSession);
-    if (!booking) {
-      // No existing booking; create a minimal placeholder to allow check‑in without prior reservation
-      booking = new Booking({
-        // Populate required fields with defaults; adjust as needed for your business logic
-        customer: (req as any).user?._id || new mongoose.Types.ObjectId(),
-        bookingCategory: "Walk‑In",
-        rooms: [],
-        pricingSummary: {
-          grandTotal: 0,
-          taxAmount: 0,
-          taxPercentage: 0,
-          roomTotal: 0,
-          dueAmount: 0,
-        },
-      } as any);
-      await booking.save({ session: mongoSession });
+    let booking = null;
+    if (bookingId) {
+      booking = await Booking.findById(bookingId).session(mongoSession);
     }
 
     let selections = [];
     if (roomSelections) {
       selections = typeof roomSelections === 'string' ? JSON.parse(roomSelections) : roomSelections;
-    } else if (booking.rooms && booking.rooms.length > 0) {
-      selections = booking.rooms.map((r: any) => ({
+    } else if (booking?.rooms && booking?.rooms.length > 0) {
+      selections = booking?.rooms.map((r: any) => ({
         roomId: r.roomId,
         roomType: r.roomType,
         originalPrice: r.pricePerNight || 0,
@@ -253,10 +239,10 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     const checkInTimeVal = checkInTime ? new Date(checkInTime) : new Date();
     const checkOutTimeVal = expectedCheckOutTime
       ? new Date(expectedCheckOutTime)
-      : (booking.rooms?.[0]?.checkOutDate || addDays(new Date(), 1));
+      : (booking?.rooms?.[0]?.checkOutDate || addDays(new Date(), 1));
 
     // Calculate nights for billing (Room Stay only)
-    const isDayAccess = booking.bookingCategory === "Day Access";
+    const isDayAccess = booking?.bookingCategory === "Day Access";
 
     let nights = isDayAccess ? 1 : Math.max(1, differenceInDays(
       startOfDay(checkOutTimeVal),
@@ -266,8 +252,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     // Fetch package details if Day Access
     let packageDetails: any = undefined;
     if (isDayAccess) {
-      const accessPackage = booking.accessPackageId
-        ? await DayAccessPackage.findById(booking.accessPackageId).lean()
+      const accessPackage = booking?.accessPackageId
+        ? await DayAccessPackage.findById(booking?.accessPackageId).lean()
         : null;
       if (accessPackage) {
         packageDetails = {
@@ -305,7 +291,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
         // Prevent assigning a room already booked by a different confirmed booking for overlapping dates
         const conflictingBooking = await Booking.findOne({
-          _id: { $ne: booking._id },
+          ...(booking ? { _id: { $ne: booking._id } } : {}),
           status: { $in: ["Confirmed", "Checked-In"] },
           rooms: {
             $elemMatch: {
@@ -359,48 +345,50 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
       // Resolve tax percentage
       let taxPct = 12;
-      if (booking.taxGstId) {
+      if (booking?.taxGstId) {
         try {
-          const taxDoc = await TaxGst.findById(booking.taxGstId).session(mongoSession).lean() as any;
+          const taxDoc = await TaxGst.findById(booking?.taxGstId).session(mongoSession).lean() as any;
           if (taxDoc?.percentage) {
             taxPct = taxDoc.percentage;
           }
         } catch (_) { /* use default 12% */ }
-      } else if ((booking.pricingSummary as any)?.taxPercentage) {
-        taxPct = (booking.pricingSummary as any).taxPercentage;
+      } else if ((booking?.pricingSummary as any)?.taxPercentage) {
+        taxPct = (booking?.pricingSummary as any).taxPercentage;
       }
 
-      const addonTotal = (booking.addons || []).reduce(
+      const addonTotal = (booking?.addons || []).reduce(
         (s: number, a: any) => s + (Number(a.total) || 0),
         0,
       );
       const actualTaxAmount = Math.round(actualRoomTotal * taxPct / 100);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
-      const paidSoFar = (booking.pricingSummary as any)?.paidAmount || 0;
+      const paidSoFar = (booking?.pricingSummary as any)?.paidAmount || 0;
 
-      await Booking.updateOne(
-        { _id: booking._id },
-        {
-          $set: {
-            "pricingSummary.roomTotal": actualRoomTotal,
-            "pricingSummary.taxAmount": actualTaxAmount,
-            "pricingSummary.taxPercentage": taxPct,
-            "pricingSummary.grandTotal": actualGrandTotal,
-            "pricingSummary.dueAmount": Math.max(0, actualGrandTotal - paidSoFar),
+      if (booking) {
+        await Booking.updateOne(
+          { _id: booking._id },
+          {
+            $set: {
+              "pricingSummary.roomTotal": actualRoomTotal,
+              "pricingSummary.taxAmount": actualTaxAmount,
+              "pricingSummary.taxPercentage": taxPct,
+              "pricingSummary.grandTotal": actualGrandTotal,
+              "pricingSummary.dueAmount": Math.max(0, actualGrandTotal - paidSoFar),
+            },
           },
-        },
-        { session: mongoSession },
-      );
+          { session: mongoSession },
+        );
 
-      // Update local reference so paymentSummary below uses real values
-      (booking.pricingSummary as any) = {
-        ...(booking.pricingSummary as any),
-        roomTotal: actualRoomTotal,
-        taxAmount: actualTaxAmount,
-        taxPercentage: taxPct,
-        grandTotal: actualGrandTotal,
-        dueAmount: Math.max(0, actualGrandTotal - paidSoFar),
-      };
+        // Update local reference so paymentSummary below uses real values
+        (booking.pricingSummary as any) = {
+          ...(booking.pricingSummary as any),
+          roomTotal: actualRoomTotal,
+          taxAmount: actualTaxAmount,
+          taxPercentage: taxPct,
+          grandTotal: actualGrandTotal,
+          dueAmount: Math.max(0, actualGrandTotal - paidSoFar),
+        };
+      }
     }
 
     const grcDetails = generateGRC ? [{
@@ -421,8 +409,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     const newCheckIn = new CheckIn({
       checkInId,
-      bookingId: booking._id,
-      bookingCategory: booking.bookingCategory || "Room Stay",
+      ...(booking ? { bookingId: booking._id } : {}),
+      bookingCategory: booking?.bookingCategory || "Room Stay",
       checkInType: checkInType || "Individual",
       roomDetails,
       guests: guestList,
@@ -431,13 +419,13 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       status: "Active",
       stayType: "Original",
       paymentStatus: parsedTotalAdvance > 0
-        ? (parsedTotalAdvance >= (booking.pricingSummary?.grandTotal || 0) ? "Paid" : "Partial")
+        ? (parsedTotalAdvance >= (booking?.pricingSummary?.grandTotal || 0) ? "Paid" : "Partial")
         : "Pending",
       paymentSummary: {
-        totalAmount: booking.pricingSummary?.grandTotal || 0,
+        totalAmount: booking?.pricingSummary?.grandTotal || 0,
         totalPaid: parsedTotalAdvance,
-        dueAmount: (booking.pricingSummary?.grandTotal || 0) - parsedTotalAdvance,
-        taxAmount: booking.pricingSummary?.taxAmount || 0,
+        dueAmount: (booking?.pricingSummary?.grandTotal || 0) - parsedTotalAdvance,
+        taxAmount: booking?.pricingSummary?.taxAmount || 0,
       },
       payments: parsedPayments.map((p: any) => ({
         amount: p.amount,
@@ -448,7 +436,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       })),
       grcDetails,
       vehicleDetails: parsedVehicles,
-      addons: (booking.addons || []).map((a: any) => ({
+      addons: (booking?.addons || []).map((a: any) => ({
         name: a.serviceName,
         quantity: a.quantity,
         rate: a.rate,
@@ -480,34 +468,36 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     createdCheckIns.push(newCheckIn);
 
     // For Day Access bookings, rooms may be empty/undefined — use optional chaining
-    const totalBookedRooms = (booking.rooms?.length || 0);
+    const totalBookedRooms = (booking?.rooms?.length || 0);
     const totalCheckedRooms = createdCheckIns.reduce(
       (sum: number, item: any) => sum + (item.roomDetails?.length || 0),
       0
     );
 
-    booking.status = isDayAccess ? "Checked-In" : (totalCheckedRooms >= totalBookedRooms ? "Checked-In" : booking.status);
-    await booking.save({ session: mongoSession });
+    if (booking) {
+      booking.status = isDayAccess ? "Checked-In" : (totalCheckedRooms >= totalBookedRooms ? "Checked-In" : booking.status);
+      await booking.save({ session: mongoSession });
 
-    // Update booking's paidAmount and dueAmount to include check-in payment
-    if (parsedTotalAdvance > 0) {
-      const bookingPaidBefore = (booking.pricingSummary as any)?.paidAmount || 0;
-      const totalPaidNow = bookingPaidBefore + parsedTotalAdvance;
-      const grandTotal = (booking.pricingSummary as any)?.grandTotal || 0;
-      const newDue = Math.max(0, grandTotal - totalPaidNow);
-      const newPaymentStatus = grandTotal > 0 && totalPaidNow >= grandTotal ? "Paid" : "Partial";
+      // Update booking's paidAmount and dueAmount to include check-in payment
+      if (parsedTotalAdvance > 0) {
+        const bookingPaidBefore = (booking.pricingSummary as any)?.paidAmount || 0;
+        const totalPaidNow = bookingPaidBefore + parsedTotalAdvance;
+        const grandTotal = (booking.pricingSummary as any)?.grandTotal || 0;
+        const newDue = Math.max(0, grandTotal - totalPaidNow);
+        const newPaymentStatus = grandTotal > 0 && totalPaidNow >= grandTotal ? "Paid" : "Partial";
 
-      await Booking.updateOne(
-        { _id: booking._id },
-        {
-          $set: {
-            "pricingSummary.paidAmount": totalPaidNow,
-            "pricingSummary.dueAmount": newDue,
-            paymentStatus: newPaymentStatus,
+        await Booking.updateOne(
+          { _id: booking._id },
+          {
+            $set: {
+              "pricingSummary.paidAmount": totalPaidNow,
+              "pricingSummary.dueAmount": newDue,
+              paymentStatus: newPaymentStatus,
+            },
           },
-        },
-        { session: mongoSession },
-      );
+          { session: mongoSession },
+        );
+      }
     }
 
     // Build room charges: for Room Stay use per-night, for Day Access use flat add-on price
@@ -527,7 +517,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         stayType: "Original" as const,
       }));
       // Package price is the base, room add-ons are on top
-      totalRoomCharges = (booking.pricingSummary?.roomTotal || booking.pricingSummary?.grandTotal || 0)
+      totalRoomCharges = (booking?.pricingSummary?.roomTotal || booking?.pricingSummary?.grandTotal || 0)
         + roomChargesBreakdown.reduce((sum: number, r: any) => sum + r.totalRoomCharge, 0);
     } else {
       roomChargesBreakdown = roomDetails.map((room: any) => {
@@ -550,9 +540,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       );
     }
 
-    const bookingAddonTotal = (booking.addons || []).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
+    const bookingAddonTotal = (booking?.addons || []).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
 
-    let billing = await Billing.findOne({ bookingId: booking._id }).session(mongoSession);
+    let billing = await Billing.findOne({ ...(booking ? { bookingId: booking._id } : {}) }).session(mongoSession);
 
 
     if (!billing) {
@@ -563,8 +553,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         billingStatus: "Draft",
         settlementStatus: "Open",
         checkInId: newCheckIn._id,
-        bookingId: booking._id,
-        customerId: (booking.customerId as mongoose.Types.ObjectId) || new mongoose.Types.ObjectId(),
+        ...(booking ? { bookingId: booking._id } : {}),
+        customerId: booking?.customerId || new mongoose.Types.ObjectId(),
         isCorporateBill: checkInType === "Corporate",
         corporateDetails: checkInType === "Corporate" && parsedCorporateData ? {
           companyName: parsedCorporateData.companyName || "",
@@ -575,7 +565,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         } : undefined,
         roomChargesBreakdown,
         totalRoomCharges,
-        extraServices: (booking.addons || []).map((a: any) => ({
+        extraServices: (booking?.addons || []).map((a: any) => ({
           serviceName: a.serviceName,
           quantity: a.quantity,
           rate: a.rate,
@@ -587,16 +577,16 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         otherCharges: 0,
         subTotal: totalRoomCharges + bookingAddonTotal,
         taxBreakdown: {
-          cgst: (booking.pricingSummary?.taxAmount || 0) / 2,
-          sgst: (booking.pricingSummary?.taxAmount || 0) / 2,
+          cgst: (booking?.pricingSummary?.taxAmount || 0) / 2,
+          sgst: (booking?.pricingSummary?.taxAmount || 0) / 2,
           serviceCharge: 0,
           cess: 0,
-          totalTax: booking.pricingSummary?.taxAmount || 0,
+          totalTax: booking?.pricingSummary?.taxAmount || 0,
         },
         discount: 0,
-        grandTotal: totalRoomCharges + bookingAddonTotal + (booking.pricingSummary?.taxAmount || 0),
+        grandTotal: totalRoomCharges + bookingAddonTotal + (booking?.pricingSummary?.taxAmount || 0),
         paidAmount: parsedTotalAdvance,
-        dueAmount: (totalRoomCharges + bookingAddonTotal + (booking.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
+        dueAmount: (totalRoomCharges + bookingAddonTotal + (booking?.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
         paymentStatus: parsedTotalAdvance > 0 ? "Partial" : "Unpaid",
         paymentModeSummary: {
           cash: parsedPayments.filter((p: any) => p.paymentMode === "Cash").reduce((s: number, p: any) => s + Number(p.amount), 0),
