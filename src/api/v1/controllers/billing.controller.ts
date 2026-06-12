@@ -73,7 +73,7 @@ export const processCheckout = async (req: Request, res: Response) => {
     const subTotal = totalRoomCharges + servicesTotal + facilitiesTotal + Number(restaurantCharges || 0);
     const taxAmt = parseFloat(((subTotal * Number(taxPercentage || 0)) / 100).toFixed(2));
     const grandTotal = parseFloat((subTotal + taxAmt - Number(discount || 0)).toFixed(2));
-    const advanceDeducted = checkInData.paymentSummary?.totalPaid || checkInData.totalAdvanceAmount || 0;
+    const advanceDeducted = checkInData.totalAdvanceAmount || checkInData.paymentSummary?.totalPaid || 0;
     const netPayable = parseFloat(Math.max(0, grandTotal - advanceDeducted).toFixed(2));
 
     let bill = await Billing.findOne({
@@ -114,18 +114,6 @@ export const processCheckout = async (req: Request, res: Response) => {
       const operatorId = (req as any).user?._id || new mongoose.Types.ObjectId();
       await recordCharge(bill._id, bill.bookingId, grandTotal, operatorId, { session });
 
-      if (advanceDeducted > 0) {
-        await recordPayment(
-          bill._id,
-          bill.bookingId,
-          advanceDeducted,
-          PaymentMode.Cash,
-          "Initial Check-in Advance",
-          operatorId,
-          "Transferred from check-in advance",
-          { session }
-        );
-      }
     } else {
       const billingPayload: any = {
         checkInId,
@@ -165,10 +153,11 @@ export const processCheckout = async (req: Request, res: Response) => {
     }
 
     const totalPaidFromLedger = await getComputedPaidAmount(bill._id, { session });
-    const dueAmount = parseFloat(Math.max(0, grandTotal - totalPaidFromLedger).toFixed(2));
-    const paymentStatus = dueAmount <= 0 && grandTotal > 0 ? "Paid" : totalPaidFromLedger > 0 ? "Partial" : "Unpaid";
+    const computedTotalPaid = totalPaidFromLedger + advanceDeducted;
+    const dueAmount = parseFloat(Math.max(0, grandTotal - computedTotalPaid).toFixed(2));
+    const paymentStatus = dueAmount <= 0 && grandTotal > 0 ? "Paid" : computedTotalPaid > 0 ? "Partial" : "Unpaid";
 
-    bill.paidAmount = totalPaidFromLedger;
+    bill.paidAmount = computedTotalPaid;
     bill.dueAmount = dueAmount;
     bill.paymentStatus = paymentStatus;
     await bill.save({ session });
@@ -208,7 +197,7 @@ export const processCheckout = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: `Cannot checkout. Due amount ₹${dueAmount} is still pending.`,
-        data: { dueAmount, grandTotal, totalPaid: totalPaidFromLedger },
+        data: { dueAmount, grandTotal, totalPaid: computedTotalPaid },
       });
     }
 
