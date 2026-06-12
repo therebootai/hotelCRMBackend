@@ -63,6 +63,15 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       signedGRCFile = Array.isArray(files.signedGRC) ? files.signedGRC[0] : files.signedGRC;
     }
 
+    if (!signedGRCFile) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "GRC must be signed before check-in. Please upload the signed document.",
+      });
+    }
+
 
     const guestDocMap: Record<string, { public_id: string; secure_url: string }> = {};
 
