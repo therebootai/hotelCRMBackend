@@ -160,9 +160,23 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
-    const booking = await Booking.findById(bookingId).session(mongoSession);
+    let booking = await Booking.findById(bookingId).session(mongoSession);
     if (!booking) {
-      throw new Error("Booking not found");
+      // No existing booking; create a minimal placeholder to allow check‑in without prior reservation
+      booking = new Booking({
+        // Populate required fields with defaults; adjust as needed for your business logic
+        customer: (req as any).user?._id || new mongoose.Types.ObjectId(),
+        bookingCategory: "Walk‑In",
+        rooms: [],
+        pricingSummary: {
+          grandTotal: 0,
+          taxAmount: 0,
+          taxPercentage: 0,
+          roomTotal: 0,
+          dueAmount: 0,
+        },
+      } as any);
+      await booking.save({ session: mongoSession });
     }
 
     let selections = [];
