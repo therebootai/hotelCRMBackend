@@ -294,6 +294,7 @@ export const createOrUpdateBilling = async (
   quantity?: number,
   taxPercentageArg?: number,
   addonsArg?: any[],
+  paymentRemarks?: string,
   opts?: { session?: mongoose.ClientSession }
 ): Promise<IBilling> => {
   const session = opts?.session;
@@ -415,7 +416,7 @@ export const createOrUpdateBilling = async (
             amount: paymentAmount,
             paymentMode: paymentMode || "Cash",
             paidAt: new Date(),
-            note: "Advance payment at booking",
+            note: paymentRemarks || "Advance payment at booking",
           },
         ]
       : [],
@@ -446,7 +447,7 @@ export const createOrUpdateBilling = async (
       bookingId,
       paymentAmount,
       (paymentMode || "Cash") as any,
-      "Booking Advance",
+      paymentRemarks || "Booking Advance",
       operatorId,
       "Advance payment at booking",
       { session }
@@ -804,6 +805,7 @@ export const createBooking = async (req: Request, res: Response) => {
       purposeOfVisit,
       selectedTaxId,
       addons = [],
+      paymentRemarks,
     } = req.body;
 
     let customer = null;
@@ -1139,6 +1141,7 @@ export const createBooking = async (req: Request, res: Response) => {
         bookingCategory === "Day Access" ? (totals.totalAdults + totals.totalChildren) : undefined,
         resolvedTaxPercent,
         addons || [],
+        paymentRemarks,
         { session }
       );
     }
@@ -1310,6 +1313,7 @@ export const updateBooking = async (req: Request, res: Response) => {
       visitDate,
       advanceAmount,
       paymentMode,
+      paymentRemarks,
       source,
       status,
       corporateDetails,
@@ -1576,7 +1580,8 @@ export const updateBooking = async (req: Request, res: Response) => {
         undefined,
         undefined,
         existingBooking.pricingSummary?.taxPercentage || 12,
-        existingBooking.addons || []
+        existingBooking.addons || [],
+        paymentRemarks
       );
     } else if (totals || selectedTaxId || addons) {
       // Recalculate paymentStatus based on updated totals even if no new advance payment
