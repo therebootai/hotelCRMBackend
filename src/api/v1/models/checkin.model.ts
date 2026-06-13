@@ -46,6 +46,8 @@ export interface IAddonDetail {
   quantity: number;
   rate: number;
   total: number;
+  taxPercentage?: number;
+  taxAmount?: number;
 }
 
 // ==========================================
@@ -495,6 +497,8 @@ const CheckInSchema = new Schema<ICheckIn>(
         quantity: { type: Number, default: 1 },
         rate: { type: Number, required: true },
         total: { type: Number, required: true },
+        taxPercentage: { type: Number, default: 0 },
+        taxAmount: { type: Number, default: 0 },
       },
     ],
 

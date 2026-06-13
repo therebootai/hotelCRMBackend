@@ -50,6 +50,8 @@ export interface IExtraServiceCharge {
   quantity: number;
   rate: number;
   total: number;
+  taxPercentage?: number;
+  taxAmount?: number;
   date: Date;
 }
 
@@ -262,6 +264,8 @@ const BillingSchema = new Schema<IBilling>(
         quantity: { type: Number, default: 1 },
         rate: { type: Number, default: 0 },
         total: { type: Number, default: 0 },
+        taxPercentage: { type: Number, default: 0 },
+        taxAmount: { type: Number, default: 0 },
         date: { type: Date, default: Date.now },
       },
     ],
