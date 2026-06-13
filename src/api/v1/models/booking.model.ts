@@ -34,6 +34,8 @@ export interface IBookingAddon {
   quantity: number;
   rate: number;
   total: number;
+  taxPercentage?: number;
+  taxAmount?: number;
 }
 
 // ==========================================
@@ -373,6 +375,8 @@ const BookingSchema = new Schema<IBooking>(
         quantity: { type: Number, default: 1 },
         rate: { type: Number, required: true },
         total: { type: Number, required: true },
+        taxPercentage: { type: Number, default: 0 },
+        taxAmount: { type: Number, default: 0 },
       },
     ],
 

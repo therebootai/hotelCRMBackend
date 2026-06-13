@@ -361,7 +361,13 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         (s: number, a: any) => s + (Number(a.total) || 0),
         0,
       );
-      const actualTaxAmount = Math.round(actualRoomTotal * taxPct / 100);
+      
+      const addonTaxTotal = (booking?.addons || []).reduce(
+        (s: number, a: any) => s + ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0) / 100),
+        0,
+      );
+      
+      const actualTaxAmount = Math.round((actualRoomTotal * taxPct / 100) + addonTaxTotal);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
       const paidSoFar = (booking?.pricingSummary as any)?.paidAmount || 0;
 
@@ -442,6 +448,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         quantity: a.quantity,
         rate: a.rate,
         total: a.total,
+        taxPercentage: a.taxPercentage || 0,
+        taxAmount: a.taxAmount || 0,
       })),
       notes: notes || "",
       specialRequests: specialRequests || "",
@@ -571,6 +579,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           quantity: a.quantity,
           rate: a.rate,
           total: a.total,
+          taxPercentage: a.taxPercentage || 0,
+          taxAmount: a.taxAmount || 0,
           date: new Date(),
         })),
         facilityCharges: [],
