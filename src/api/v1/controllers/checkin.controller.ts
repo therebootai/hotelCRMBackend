@@ -45,6 +45,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       advancePayments,
       totalAdvanceAmount,
       notes,
+      extraServices,
     } = payload;
 
     const files = req.files || {};
@@ -436,8 +437,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       })),
       grcDetails,
       vehicleDetails: parsedVehicles,
-      addons: (booking?.addons || []).map((a: any) => ({
-        name: a.serviceName,
+      addons: (booking ? (booking.addons || []) : (extraServices || [])).map((a: any) => ({
+        name: a.serviceName || a.name,
         quantity: a.quantity,
         rate: a.rate,
         total: a.total,
@@ -540,7 +541,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       );
     }
 
-    const bookingAddonTotal = (booking?.addons || []).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
+    const bookingAddonTotal = (booking ? (booking.addons || []) : (extraServices || [])).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
 
     let billing = await Billing.findOne({ ...(booking ? { bookingId: booking._id } : {}) }).session(mongoSession);
 
@@ -565,8 +566,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         } : undefined,
         roomChargesBreakdown,
         totalRoomCharges,
-        extraServices: (booking?.addons || []).map((a: any) => ({
-          serviceName: a.serviceName,
+        extraServices: (booking ? (booking.addons || []) : (extraServices || [])).map((a: any) => ({
+          serviceName: a.serviceName || a.name,
           quantity: a.quantity,
           rate: a.rate,
           total: a.total,

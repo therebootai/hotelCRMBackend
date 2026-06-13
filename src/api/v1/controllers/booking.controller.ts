@@ -293,6 +293,7 @@ export const createOrUpdateBilling = async (
   packageRate?: number,
   quantity?: number,
   taxPercentageArg?: number,
+  addonsArg?: any[],
   opts?: { session?: mongoose.ClientSession }
 ): Promise<IBilling> => {
   const session = opts?.session;
@@ -353,6 +354,21 @@ export const createOrUpdateBilling = async (
     subTotal = totalRoomCharges;
   }
 
+  let extraServices: any[] = [];
+  let addonsTotal = 0;
+  if (addonsArg && addonsArg.length > 0) {
+    extraServices = addonsArg.map((a: any) => ({
+      serviceName: a.serviceName || a.name,
+      quantity: a.quantity,
+      rate: a.rate,
+      total: a.total,
+      date: new Date(),
+    }));
+    addonsTotal = extraServices.reduce((sum, a) => sum + (Number(a.total) || 0), 0);
+  }
+
+  subTotal += addonsTotal;
+
   const taxPercentage = taxPercentageArg ?? 12; // Use passed taxPercentage or default 12%
   const taxAmount = (subTotal * taxPercentage) / 100;
   const grandTotal = subTotal + taxAmount;
@@ -370,6 +386,7 @@ export const createOrUpdateBilling = async (
     roomChargesBreakdown,
     totalRoomCharges,
     packageCharges,
+    extraServices,
     subTotal,
     taxBreakdown: {
       cgst: taxAmount / 2,
@@ -1120,7 +1137,9 @@ export const createBooking = async (req: Request, res: Response) => {
         bookingCategory === "Day Access" ? dayAccessPackage?.packageType : undefined,
         bookingCategory === "Day Access" ? dayAccessPackage?.adult_price : undefined,
         bookingCategory === "Day Access" ? (totals.totalAdults + totals.totalChildren) : undefined,
-        resolvedTaxPercent
+        resolvedTaxPercent,
+        addons || [],
+        { session }
       );
     }
 
@@ -1549,7 +1568,15 @@ export const updateBooking = async (req: Request, res: Response) => {
         existingBooking.overallCheckOutDate,
         additionalAmount,
         paymentMode,
-        (req as any).user?._id
+        (req as any).user?._id,
+        existingBooking.bookingCategory,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        existingBooking.pricingSummary?.taxPercentage || 12,
+        existingBooking.addons || []
       );
     } else if (totals || selectedTaxId || addons) {
       // Recalculate paymentStatus based on updated totals even if no new advance payment
