@@ -170,8 +170,26 @@ export const checkRoomTypeAvailability = async (
     { $count: "count" },
   ]);
 
+  const checkInResult = await CheckIn.aggregate([
+    {
+      $match: {
+        status: "Active",
+        bookingId: { $exists: false },
+        "roomDetails.roomType": new mongoose.Types.ObjectId(roomTypeId),
+        $or: [
+          {
+            checkInTime: { $lt: checkOutDate },
+            expectedCheckOutTime: { $gt: checkInDate },
+          },
+        ],
+      },
+    },
+    { $count: "count" },
+  ]);
+  const activeCheckInCount = (checkInResult[0]?.count as number | undefined) ?? 0;
+
   const bookedCount = (bookedResult[0]?.count as number | undefined) ?? 0;
-  const availableCount = Math.max(0, totalRooms - bookedCount);
+  const availableCount = Math.max(0, totalRooms - bookedCount - activeCheckInCount);
 
   if (requestedCount > availableCount) {
     return {
@@ -700,11 +718,23 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
       })
     );
 
-    // Filter out null results and unavailable rooms if requested
     const availableRooms = availabilityResults.filter((r) => r !== null && r.isAvailable);
 
+    // Limit the number of available rooms per type to typeAvailCount to prevent frontend overcounting
+    const currentCounts = new Map<string, number>();
+    const finalAvailableRooms = [];
+    for (const r of availableRooms) {
+      const rtId = r!.pricing.roomTypeId.toString();
+      const maxAllowed = typeAvailMap.get(rtId) ?? 0;
+      const current = currentCounts.get(rtId) ?? 0;
+      if (current < maxAllowed) {
+        finalAvailableRooms.push(r);
+        currentCounts.set(rtId, current + 1);
+      }
+    }
+
     // Sort by price (recommended)
-    availableRooms.sort((a, b) => a!.pricing.totalPrice - b!.pricing.totalPrice);
+    finalAvailableRooms.sort((a, b) => a!.pricing.totalPrice - b!.pricing.totalPrice);
 
     res.status(200).json({
       success: true,
@@ -718,8 +748,8 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
           roomType,
           amenities,
         },
-        availableRooms,
-        totalAvailable: availableRooms.length,
+        availableRooms: finalAvailableRooms,
+        totalAvailable: finalAvailableRooms.length,
       },
     });
   } catch (error: any) {

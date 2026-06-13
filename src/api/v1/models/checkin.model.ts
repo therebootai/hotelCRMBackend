@@ -173,7 +173,7 @@ export interface IPackageDetail {
 export interface ICheckIn extends Document {
   // Core Identifiers
   checkInId: string;
-  bookingId: mongoose.Types.ObjectId;
+  bookingId?: mongoose.Types.ObjectId;
 
   // Booking Category
   bookingCategory: "Room Stay" | "Day Access" | "Event";
@@ -288,7 +288,7 @@ const CheckInSchema = new Schema<ICheckIn>(
   {
     // Core Identifiers
     checkInId: { type: String, required: true, unique: true },
-    bookingId: { type: Schema.Types.ObjectId, ref: "Booking", required: true },
+    bookingId: { type: Schema.Types.ObjectId, ref: "Booking", required: false },
 
     // Booking Category
     bookingCategory: {
