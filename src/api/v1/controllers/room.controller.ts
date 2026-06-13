@@ -28,7 +28,9 @@ export const createRoom = async (
     }
 
     const roomType = await RoomType.findById(roomData.roomType).session(session);
-    roomData.basePrice = roomType?.basePrice ?? 0;
+    if (roomData.basePrice === undefined || roomData.basePrice === null) {
+      roomData.basePrice = roomType?.basePrice ?? 0;
+    }
 
     const newRoom = new Room(roomData);
     await newRoom.save({ session });
@@ -152,7 +154,7 @@ export const updateRoom = async (
       }
     }
 
-    if (updateData.roomType) {
+    if (updateData.roomType && (updateData.basePrice === undefined || updateData.basePrice === null)) {
       const roomType = await RoomType.findById(updateData.roomType).session(session);
       updateData.basePrice = roomType?.basePrice ?? 0;
     }
