@@ -93,10 +93,37 @@ export const getAllCustomers = async (
     }
 
     const [customers, totalCount] = await Promise.all([
-      Customer.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNumber),
+      Customer.aggregate([
+        { $match: filter },
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limitNumber },
+        {
+          $lookup: {
+            from: "bookings",
+            let: { custId: "$_id" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$customerId", "$$custId"] } } },
+              { $sort: { createdAt: -1 } }
+            ],
+            as: "bookings"
+          }
+        },
+        {
+          $addFields: {
+            totalRevenue: { $sum: "$bookings.pricingSummary.grandTotal" },
+            lastStayDate: { $arrayElemAt: ["$bookings.overallCheckInDate", 0] },
+            lastStayType: { $arrayElemAt: ["$bookings.bookingCategory", 0] },
+            lastBookingStatus: { $arrayElemAt: ["$bookings.status", 0] },
+            bookingCount: { $size: "$bookings" }
+          }
+        },
+        {
+          $project: {
+            bookings: 0 // Omit the large array of bookings
+          }
+        }
+      ]),
       Customer.countDocuments(filter)
     ]);
 
