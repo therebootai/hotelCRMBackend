@@ -2,6 +2,7 @@ import { Response, NextFunction, Request } from "express";
 import mongoose from "mongoose";
 import { Room } from "@/api/v1/models/room.model";
 import { RoomType } from "@/api/v1/models/roomType.model";
+import { TaxGst } from "@/api/v1/models/taxGst.model";
 import { httpError } from "@/api/v1/utils/httpError";
 import httpResponse from "@/api/v1/utils/httpResponse";
 import { AuthRequest } from "@/api/v1/interfaces/auth";
@@ -30,6 +31,13 @@ export const createRoom = async (
     const roomType = await RoomType.findById(roomData.roomType).session(session);
     if (roomData.basePrice === undefined || roomData.basePrice === null) {
       roomData.basePrice = roomType?.basePrice ?? 0;
+    }
+
+    if (roomData.gstId) {
+      const tax = await TaxGst.findById(roomData.gstId).session(session);
+      if (!tax || !tax.isActive) {
+        throw new Error("Selected tax is not active or invalid");
+      }
     }
 
     const newRoom = new Room(roomData);
@@ -157,6 +165,13 @@ export const updateRoom = async (
     if (updateData.roomType && (updateData.basePrice === undefined || updateData.basePrice === null)) {
       const roomType = await RoomType.findById(updateData.roomType).session(session);
       updateData.basePrice = roomType?.basePrice ?? 0;
+    }
+
+    if (updateData.gstId) {
+      const tax = await TaxGst.findById(updateData.gstId).session(session);
+      if (!tax || !tax.isActive) {
+        throw new Error("Selected tax is not active or invalid");
+      }
     }
 
     const updatedRoom = await Room.findByIdAndUpdate(id, updateData, {
