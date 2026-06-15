@@ -16,6 +16,7 @@ import { recordCharge, recordPayment, recordRefund } from "../services/paymentLe
 import { recordGstEntry } from "../services/gstLedger.service";
 import { sendNotificationToRole, createNotification } from "../services/notification.service";
 import { TaxGst } from "../models/taxGst.model";
+import { waBridgeService } from "../services/wabridge.service";
 
 
 
@@ -1232,6 +1233,19 @@ export const createBooking = async (req: Request, res: Response) => {
 
     await session.commitTransaction();
 
+    // Send WhatsApp Booking Confirmation
+    if (customerDetails?.phone || customer?.phone) {
+      const phone = customerDetails?.phone || customer?.phone;
+      const name = customerDetails?.name || customer?.name || "Guest";
+      waBridgeService.sendBookingConfirmation(
+        phone, 
+        name, 
+        newBooking[0].bookingId, 
+        newBooking[0].overallCheckInDate, 
+        newBooking[0].overallCheckOutDate
+      ).catch(err => console.error("WA Booking Confirmation Error:", err));
+    }
+
     res.status(201).json({
       success: true,
       message: "Booking created successfully",
@@ -1778,6 +1792,14 @@ export const cancelBooking = async (req: Request, res: Response) => {
     }
 
     await session.commitTransaction();
+
+    // Send WhatsApp Cancellation Message
+    if (cancelledBooking.bookingContact?.mobile) {
+      const phone = cancelledBooking.bookingContact.mobile;
+      const name = cancelledBooking.bookingContact.name || "Guest";
+      waBridgeService.sendCancellation(phone, name, cancelledBooking.bookingId)
+        .catch(err => console.error("WA Cancellation Error:", err));
+    }
 
     res.status(200).json({
       success: true,

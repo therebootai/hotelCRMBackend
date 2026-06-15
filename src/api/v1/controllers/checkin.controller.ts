@@ -13,6 +13,7 @@ type UploadedFiles = { [key: string]: UploadedFile | UploadedFile[] };
 import { sendNotificationToRole } from "../services/notification.service";
 import DayAccessPackage from "../models/accessPackage.model";
 import { TaxGst } from "../models/taxGst.model";
+import { waBridgeService } from "../services/wabridge.service";
 
 interface IPopulatedRoomType {
   _id: mongoose.Types.ObjectId;
@@ -713,6 +714,12 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     await mongoSession.commitTransaction();
     mongoSession.endSession();
+
+    // Send WhatsApp Check-In Message
+    if (newCheckIn.contactNumber) {
+      waBridgeService.sendCheckIn(newCheckIn.contactNumber, newCheckIn.primaryGuestName || "Guest")
+        .catch(err => console.error("WA Check-In Error:", err));
+    }
 
     return res.status(201).json({
       success: true,

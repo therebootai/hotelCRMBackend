@@ -33,7 +33,12 @@ import customerRoutes from "@/api/v1/routes/customer.route";
 import notificationRoutes from "./api/v1/routes/notification.route";
 import reportingRoutes from "./api/v1/routes/reporting.route";
 
+import { initCheckoutReminderCron } from "./cron/checkoutReminder.cron";
+
 const app = express();
+
+// Initialize Cron Jobs
+initCheckoutReminderCron();
 
 app.use(
   cors({
