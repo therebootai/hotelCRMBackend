@@ -45,8 +45,7 @@ class WABridgeService {
       variables,
     };
 
-    // const isDev = env.ENV === "development";
-    const isDev=false;
+    const isDev = env.ENV === "development";
     try {
       if (!isDev) {
         const response = await fetch(this.apiUrl, {
