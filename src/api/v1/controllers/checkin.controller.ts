@@ -338,6 +338,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
+    let finalGrandTotal = booking?.pricingSummary?.grandTotal || 0;
+    let finalTaxAmount = booking?.pricingSummary?.taxAmount || 0;
+
     // Recalculate actual pricing from assigned rooms (Room Stay only)
     if (!isDayAccess && roomDetails.length > 0) {
       const actualRoomTotal = roomDetails.reduce(
@@ -358,12 +361,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         taxPct = (booking?.pricingSummary as any).taxPercentage;
       }
 
-      const addonTotal = (booking?.addons || []).reduce(
+      const combinedAddons = booking ? (booking.addons || []) : (extraServices || []);
+
+      const addonTotal = combinedAddons.reduce(
         (s: number, a: any) => s + (Number(a.total) || 0),
         0,
       );
       
-      const addonTaxTotal = (booking?.addons || []).reduce(
+      const addonTaxTotal = combinedAddons.reduce(
         (s: number, a: any) => s + ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0) / 100),
         0,
       );
@@ -371,6 +376,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       const actualTaxAmount = Math.round((actualRoomTotal * taxPct / 100) + addonTaxTotal);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
       const paidSoFar = (booking?.pricingSummary as any)?.paidAmount || 0;
+      
+      finalTaxAmount = actualTaxAmount;
+      finalGrandTotal = actualGrandTotal;
 
       if (booking) {
         await Booking.updateOne(
@@ -427,13 +435,13 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       status: "Active",
       stayType: "Original",
       paymentStatus: parsedTotalAdvance > 0
-        ? (parsedTotalAdvance >= (booking?.pricingSummary?.grandTotal || 0) ? "Paid" : "Partial")
+        ? (parsedTotalAdvance >= finalGrandTotal ? "Paid" : "Partial")
         : "Pending",
       paymentSummary: {
-        totalAmount: booking?.pricingSummary?.grandTotal || 0,
+        totalAmount: finalGrandTotal,
         totalPaid: parsedTotalAdvance,
-        dueAmount: (booking?.pricingSummary?.grandTotal || 0) - parsedTotalAdvance,
-        taxAmount: booking?.pricingSummary?.taxAmount || 0,
+        dueAmount: finalGrandTotal - parsedTotalAdvance,
+        taxAmount: finalTaxAmount,
       },
       payments: parsedPayments.map((p: any) => ({
         amount: p.amount,
