@@ -46,6 +46,8 @@ app.use(
       const allowedOrigins = [
         "https://hotelcrmproto.netlify.app",
         "https://gallamart.com",
+        "http://reboots.siddharajhotelandresort.com",
+        "https://reboots.siddharajhotelandresort.com",
       ];
       if (
         !origin ||
