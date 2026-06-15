@@ -13,6 +13,7 @@ type UploadedFiles = { [key: string]: UploadedFile | UploadedFile[] };
 import { sendNotificationToRole } from "../services/notification.service";
 import DayAccessPackage from "../models/accessPackage.model";
 import { TaxGst } from "../models/taxGst.model";
+import { waBridgeService } from "../services/wabridge.service";
 
 interface IPopulatedRoomType {
   _id: mongoose.Types.ObjectId;
@@ -337,6 +338,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
+    let finalGrandTotal = booking?.pricingSummary?.grandTotal || 0;
+    let finalTaxAmount = booking?.pricingSummary?.taxAmount || 0;
+
     // Recalculate actual pricing from assigned rooms (Room Stay only)
     if (!isDayAccess && roomDetails.length > 0) {
       const actualRoomTotal = roomDetails.reduce(
@@ -357,12 +361,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         taxPct = (booking?.pricingSummary as any).taxPercentage;
       }
 
-      const addonTotal = (booking?.addons || []).reduce(
+      const combinedAddons = booking ? (booking.addons || []) : (extraServices || []);
+
+      const addonTotal = combinedAddons.reduce(
         (s: number, a: any) => s + (Number(a.total) || 0),
         0,
       );
       
-      const addonTaxTotal = (booking?.addons || []).reduce(
+      const addonTaxTotal = combinedAddons.reduce(
         (s: number, a: any) => s + ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0) / 100),
         0,
       );
@@ -370,6 +376,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       const actualTaxAmount = Math.round((actualRoomTotal * taxPct / 100) + addonTaxTotal);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
       const paidSoFar = (booking?.pricingSummary as any)?.paidAmount || 0;
+      
+      finalTaxAmount = actualTaxAmount;
+      finalGrandTotal = actualGrandTotal;
 
       if (booking) {
         await Booking.updateOne(
@@ -426,13 +435,13 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       status: "Active",
       stayType: "Original",
       paymentStatus: parsedTotalAdvance > 0
-        ? (parsedTotalAdvance >= (booking?.pricingSummary?.grandTotal || 0) ? "Paid" : "Partial")
+        ? (parsedTotalAdvance >= finalGrandTotal ? "Paid" : "Partial")
         : "Pending",
       paymentSummary: {
-        totalAmount: booking?.pricingSummary?.grandTotal || 0,
+        totalAmount: finalGrandTotal,
         totalPaid: parsedTotalAdvance,
-        dueAmount: (booking?.pricingSummary?.grandTotal || 0) - parsedTotalAdvance,
-        taxAmount: booking?.pricingSummary?.taxAmount || 0,
+        dueAmount: finalGrandTotal - parsedTotalAdvance,
+        taxAmount: finalTaxAmount,
       },
       payments: parsedPayments.map((p: any) => ({
         amount: p.amount,
@@ -713,6 +722,24 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     await mongoSession.commitTransaction();
     mongoSession.endSession();
+
+    // Send WhatsApp Check-In Message
+    let phone = "";
+    let name = "Guest";
+
+    if (newCheckIn.checkInType === "Corporate" && newCheckIn.corporateCheckInDetails?.contactMobile) {
+      phone = newCheckIn.corporateCheckInDetails.contactMobile;
+      name = newCheckIn.corporateCheckInDetails.contactPersonName || "Guest";
+    } else if (newCheckIn.guests && newCheckIn.guests.length > 0) {
+      const primaryGuest = newCheckIn.guests.find((g: any) => g.isPrimary) || newCheckIn.guests[0];
+      phone = primaryGuest.mobileNo || "";
+      name = primaryGuest.name || "Guest";
+    }
+
+    if (phone) {
+      waBridgeService.sendCheckIn(phone, name)
+        .catch(err => console.error("WA Check-In Error:", err));
+    }
 
     return res.status(201).json({
       success: true,

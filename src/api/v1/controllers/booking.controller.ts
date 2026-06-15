@@ -16,9 +16,10 @@ import { recordCharge, recordPayment, recordRefund } from "../services/paymentLe
 import { recordGstEntry } from "../services/gstLedger.service";
 import { sendNotificationToRole, createNotification } from "../services/notification.service";
 import { TaxGst } from "../models/taxGst.model";
-
-
-
+import { waBridgeService } from "../services/wabridge.service";
+import puppeteer from "puppeteer";
+import { emailService } from "../services/email.service";
+import { buildReceiptHtml } from "../../../utils/receiptHtmlBuilder";
 
 interface IRoomAvailabilitySearch {
   checkInDate: Date;
@@ -350,7 +351,7 @@ export const createOrUpdateBilling = async (
           // If room is not yet assigned, calculate based on passed pricePerNight
           if (room.roomType) {
             const rt = await mongoose.model("RoomType").findById(room.roomType);
-            roomTypeName = rt?.name || "";
+            roomTypeName = (rt as any)?.name || "";
           }
           totalPrice = finalRate * nights;
         }
@@ -894,6 +895,21 @@ export const createBooking = async (req: Request, res: Response) => {
     let totals;
     let dayAccessPackage = null;
 
+    // Resolve selected tax from tax-gst master
+    let resolvedTaxPercent = 12;
+    let taxGstId: mongoose.Types.ObjectId | undefined;
+    if (selectedTaxId) {
+      try {
+        const taxGst = await TaxGst.findById(selectedTaxId).session(session);
+        if (taxGst && taxGst.isActive) {
+          resolvedTaxPercent = taxGst.percentage;
+          taxGstId = taxGst._id as mongoose.Types.ObjectId;
+        }
+      } catch (err) {
+        console.error("Error resolving selectedTaxId:", err);
+      }
+    }
+
     if (bookingCategory === "Day Access") {
       const { accessPackageId, visitDate, adults = 1, children = 0 } = req.body;
       if (!accessPackageId || !visitDate) {
@@ -1091,20 +1107,7 @@ export const createBooking = async (req: Request, res: Response) => {
       }
     }
 
-    // Resolve selected tax from tax-gst master
-    let resolvedTaxPercent = 12;
-    let taxGstId: mongoose.Types.ObjectId | undefined;
-    if (selectedTaxId) {
-      try {
-        const taxGst = await TaxGst.findById(selectedTaxId).session(session);
-        if (taxGst && taxGst.isActive) {
-          resolvedTaxPercent = taxGst.percentage;
-          taxGstId = taxGst._id as mongoose.Types.ObjectId;
-        }
-      } catch (err) {
-        console.error("Error resolving selectedTaxId:", err);
-      }
-    }
+    // Tax resolution moved to start of function
 
     // Recalculate totals with the resolved tax percentage and addons
     let addonTotal = 0;
@@ -1231,6 +1234,19 @@ export const createBooking = async (req: Request, res: Response) => {
     }
 
     await session.commitTransaction();
+
+    // Send WhatsApp Booking Confirmation
+    if (customerDetails?.phone || customer?.phone) {
+      const phone = customerDetails?.phone || customer?.phone;
+      const name = customerDetails?.name || customer?.name || "Guest";
+      waBridgeService.sendBookingConfirmation(
+        phone, 
+        name, 
+        newBooking[0].bookingId, 
+        newBooking[0].overallCheckInDate, 
+        newBooking[0].overallCheckOutDate
+      ).catch(err => console.error("WA Booking Confirmation Error:", err));
+    }
 
     res.status(201).json({
       success: true,
@@ -1779,6 +1795,14 @@ export const cancelBooking = async (req: Request, res: Response) => {
 
     await session.commitTransaction();
 
+    // Send WhatsApp Cancellation Message
+    if (cancelledBooking.bookingContact?.mobile) {
+      const phone = cancelledBooking.bookingContact.mobile;
+      const name = cancelledBooking.bookingContact.name || "Guest";
+      waBridgeService.sendCancellation(phone, name, cancelledBooking.bookingId)
+        .catch(err => console.error("WA Cancellation Error:", err));
+    }
+
     res.status(200).json({
       success: true,
       message: "Booking cancelled successfully",
@@ -2088,5 +2112,59 @@ export const getBookingCalendar = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const emailReceipt = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    const booking = await Booking.findById(id)
+      .populate("customerId")
+      .populate({
+        path: "rooms.roomType",
+        select: "name description"
+      });
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const html = buildReceiptHtml(booking.toObject());
+
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    // Wait for networkidle0 so tailwind CDN loads and applies styles
+    await page.setContent(html, { waitUntil: "load" });
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: { top: "0mm", bottom: "0mm", left: "0mm", right: "0mm" },
+    });
+    await browser.close();
+
+    const filename = `Receipt_${(booking as any).reservationNumber || booking.bookingId || "Booking"}.pdf`;
+
+    await emailService.sendEmailWithAttachment(
+      email,
+      `Your Booking Receipt - Siddharaj Resort [${(booking as any).reservationNumber || booking.bookingId}]`,
+      "Please find your booking receipt attached.",
+      "<p>Dear Guest,</p><p>Please find your booking receipt attached.</p><p>Thank you for choosing Siddharaj Resort.</p>",
+      Buffer.from(pdfBuffer),
+      filename
+    );
+
+    res.status(200).json({ success: true, message: "Receipt sent successfully" });
+  } catch (error: any) {
+    console.error("emailReceipt error:", error);
+    res.status(500).json({ success: false, message: error.message || "Failed to send receipt" });
   }
 };
