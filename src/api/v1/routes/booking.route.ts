@@ -9,6 +9,7 @@ import {
   cancelBooking,
   getBookingOverview,
   getBookingCalendar,
+  emailReceipt,
 } from "../controllers/booking.controller";
 import { validateRequest } from "@/api/v1/middlewares/validateRequest.middleware";
 import { protect } from "@/api/v1/middlewares/auth.middleware";
@@ -37,5 +38,6 @@ router.get("/:id", validateRequest(getBookingByIdSchema), requirePermission(["MA
 router.post("/create", validateRequest(createBookingSchema), requirePermission("MANAGE_BOOKINGS"), createBooking);
 router.put("/:id", validateRequest(updateBookingSchema), requirePermission("MANAGE_BOOKINGS"), updateBooking);
 router.patch("/:id/cancel", validateRequest(cancelBookingSchema), requirePermission("MANAGE_BOOKINGS"), cancelBooking);
+router.post("/:id/email-receipt", requirePermission("MANAGE_BOOKINGS"), emailReceipt);
 
 export default router;

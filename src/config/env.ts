@@ -26,6 +26,12 @@ const env = {
   WA_TEMPLATE_CHECKOUT_REMINDER: getEnv("WA_TEMPLATE_CHECKOUT_REMINDER", false),
   WA_TEMPLATE_CHECKIN: getEnv("WA_TEMPLATE_CHECKIN", false),
   WA_TEMPLATE_BOOKING_CONFIRMATION: getEnv("WA_TEMPLATE_BOOKING_CONFIRMATION", false),
+
+  SMTP_HOST: getEnv("SMTP_HOST", false) || "smtp.gmail.com",
+  SMTP_PORT: Number(getEnv("SMTP_PORT", false)) || 587,
+  SMTP_USER: getEnv("SMTP_USER", false),
+  SMTP_PASS: getEnv("SMTP_PASS", false),
+  SMTP_FROM: getEnv("SMTP_FROM", false) || "Siddharaj Resort <no-reply@siddharajresort.com>",
 } as const;
 
 export default env;

@@ -17,9 +17,9 @@ import { recordGstEntry } from "../services/gstLedger.service";
 import { sendNotificationToRole, createNotification } from "../services/notification.service";
 import { TaxGst } from "../models/taxGst.model";
 import { waBridgeService } from "../services/wabridge.service";
-
-
-
+import puppeteer from "puppeteer";
+import { emailService } from "../services/email.service";
+import { buildReceiptHtml } from "../../../utils/receiptHtmlBuilder";
 
 interface IRoomAvailabilitySearch {
   checkInDate: Date;
@@ -2110,5 +2110,59 @@ export const getBookingCalendar = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const emailReceipt = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    const booking = await Booking.findById(id)
+      .populate("customerId")
+      .populate({
+        path: "rooms.roomType",
+        select: "name description"
+      });
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const html = buildReceiptHtml(booking.toObject());
+
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    // Wait for networkidle0 so tailwind CDN loads and applies styles
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: { top: "0mm", bottom: "0mm", left: "0mm", right: "0mm" },
+    });
+    await browser.close();
+
+    const filename = `Receipt_${booking.reservationNumber || booking.bookingId || "Booking"}.pdf`;
+
+    await emailService.sendEmailWithAttachment(
+      email,
+      `Your Booking Receipt - Siddharaj Resort [${booking.reservationNumber || booking.bookingId}]`,
+      "Please find your booking receipt attached.",
+      "<p>Dear Guest,</p><p>Please find your booking receipt attached.</p><p>Thank you for choosing Siddharaj Resort.</p>",
+      Buffer.from(pdfBuffer),
+      filename
+    );
+
+    res.status(200).json({ success: true, message: "Receipt sent successfully" });
+  } catch (error: any) {
+    console.error("emailReceipt error:", error);
+    res.status(500).json({ success: false, message: error.message || "Failed to send receipt" });
   }
 };
