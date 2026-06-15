@@ -17,7 +17,7 @@ export function buildReceiptHtml(booking: any) {
   const advancePaid = booking.pricingSummary?.paidAmount || booking.advanceAmount || 0;
   const grandTotal = booking.pricingSummary?.grandTotal || 0;
   const balanceDue = booking.pricingSummary?.dueAmount ?? (grandTotal - advancePaid);
-  const paymentMode = booking.paymentMode || "Online / UPI";
+  const paymentMode = advancePaid > 0 ? (booking.paymentMode || "Online / UPI") : "N/A";
 
   const roomCharges = booking.pricingSummary?.roomTotal || 0;
   const roomTaxAmount = (booking.pricingSummary?.taxAmount || 0) - servicesList.reduce((acc: number, s: any) => acc + (s.taxAmount || 0), 0);
