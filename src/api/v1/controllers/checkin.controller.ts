@@ -716,8 +716,20 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     mongoSession.endSession();
 
     // Send WhatsApp Check-In Message
-    if (newCheckIn.contactNumber) {
-      waBridgeService.sendCheckIn(newCheckIn.contactNumber, newCheckIn.primaryGuestName || "Guest")
+    let phone = "";
+    let name = "Guest";
+
+    if (newCheckIn.checkInType === "Corporate" && newCheckIn.corporateCheckInDetails?.contactMobile) {
+      phone = newCheckIn.corporateCheckInDetails.contactMobile;
+      name = newCheckIn.corporateCheckInDetails.contactPersonName || "Guest";
+    } else if (newCheckIn.guests && newCheckIn.guests.length > 0) {
+      const primaryGuest = newCheckIn.guests.find((g: any) => g.isPrimary) || newCheckIn.guests[0];
+      phone = primaryGuest.mobileNo || "";
+      name = primaryGuest.name || "Guest";
+    }
+
+    if (phone) {
+      waBridgeService.sendCheckIn(phone, name)
         .catch(err => console.error("WA Check-In Error:", err));
     }
 
