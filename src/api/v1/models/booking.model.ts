@@ -148,6 +148,8 @@ export interface IBooking extends Document {
   // Payment Tracking
   paymentStatus: "Pending" | "Partial" | "Paid" | "Refunded";
   advanceAmount: number;
+  paymentMode?: string;
+  paymentRemarks?: string;
 
   // Pricing Summary
   pricingSummary: IPricingSummary;
@@ -327,6 +329,8 @@ const BookingSchema = new Schema<IBooking>(
       default: "Pending",
     },
     advanceAmount: { type: Number, default: 0 },
+    paymentMode: { type: String },
+    paymentRemarks: { type: String },
 
     // Pricing Summary
     pricingSummary: {

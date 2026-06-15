@@ -1155,6 +1155,8 @@ export const createBooking = async (req: Request, res: Response) => {
           expiresAt: (status === "Hold" || expiresAt) ? expiresAt : undefined,
           paymentStatus: advanceAmount > 0 ? "Partial" : "Pending",
           advanceAmount,
+          paymentMode,
+          paymentRemarks,
           pricingSummary: {
             roomTotal: totals.roomTotal,
             discountAmount: totals.discountAmount,
@@ -1405,6 +1407,7 @@ export const updateBooking = async (req: Request, res: Response) => {
       expiresAt,
       selectedTaxId,
       purposeOfVisit,
+      customerDetails,
     } = req.body;
 
     const existingBooking = await Booking.findById(id);
@@ -1596,6 +1599,36 @@ export const updateBooking = async (req: Request, res: Response) => {
       existingBooking.purposeOfVisit = purposeOfVisit;
     }
     if (addons) existingBooking.addons = addons;
+
+    if (paymentMode) existingBooking.paymentMode = paymentMode;
+    if (req.body.hasOwnProperty("paymentRemarks")) existingBooking.paymentRemarks = paymentRemarks;
+    if (req.body.hasOwnProperty("remarks")) (existingBooking as any).notes = req.body.remarks;
+
+    if (req.body.travelAgentInfo) {
+      (existingBooking as any).travelAgentInfo = req.body.travelAgentInfo;
+      if (req.body.travelAgentInfo.referenceId) {
+        existingBooking.externalBookingId = req.body.travelAgentInfo.referenceId;
+      }
+    }
+
+    if (customerDetails) {
+      if (existingBooking.customerId) {
+        await Customer.findByIdAndUpdate(existingBooking.customerId, {
+          $set: {
+            name: customerDetails.name,
+            phone: customerDetails.phone,
+            ...(customerDetails.email ? { email: customerDetails.email } : {}),
+            ...(customerDetails.address ? { address: customerDetails.address } : {}),
+          }
+        }, { session });
+      }
+      
+      existingBooking.bookingContact = {
+        name: customerDetails.name,
+        mobile: customerDetails.phone,
+        email: customerDetails.email || "",
+      };
+    }
   
     let resolvedTaxPercent = existingBooking.pricingSummary.taxPercentage || 12;
     if (selectedTaxId) {
