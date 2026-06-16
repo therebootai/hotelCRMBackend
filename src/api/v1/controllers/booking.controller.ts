@@ -1180,7 +1180,6 @@ export const createBooking = async (req: Request, res: Response) => {
           status: status ?? (advanceAmount > 0 ? "Confirmed" : "Pending"),
           source,
           externalBookingId,
-          expiresAt: (status === "Hold" || expiresAt) ? expiresAt : undefined,
           paymentStatus: advanceAmount > 0 ? "Partial" : "Pending",
           advanceAmount,
           paymentMode,
@@ -1432,7 +1431,6 @@ export const updateBooking = async (req: Request, res: Response) => {
       preferences,
       internalNotes,
       specialRequests,
-      expiresAt,
       selectedTaxId,
       purposeOfVisit,
       customerDetails,
@@ -1634,14 +1632,6 @@ export const updateBooking = async (req: Request, res: Response) => {
         },
         { session }
       );
-    }
-
-    if (req.body.hasOwnProperty("expiresAt")) {
-      existingBooking.expiresAt = expiresAt ? new Date(expiresAt) : undefined;
-    }
-    // If status is updated to Confirmed/Checked-In, clear hold expiry
-    if (targetStatus && targetStatus !== "Hold") {
-      existingBooking.expiresAt = undefined;
     }
 
     if (source) existingBooking.source = source;

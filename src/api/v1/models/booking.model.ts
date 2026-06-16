@@ -142,7 +142,7 @@ export interface IBooking extends Document {
   externalBookingId?: string;
 
   // Booking Hold Expiry
-  expiresAt?: Date;
+
 
   // Payment Tracking
   paymentStatus: "Pending" | "Partial" | "Paid" | "Refunded";
@@ -318,7 +318,7 @@ const BookingSchema = new Schema<IBooking>(
     externalBookingId: { type: String },
 
     // Booking Hold Expiry
-    expiresAt: { type: Date },
+
 
     // Payment Tracking
     paymentStatus: {
