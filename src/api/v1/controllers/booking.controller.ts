@@ -91,10 +91,7 @@ export const checkRoomAvailability = async (
 
   const now = new Date();
   const bookingQuery: any = {
-    $or: [
-      { status: { $in: ["Pending", "Confirmed", "Checked-In"] } },
-      { status: "Hold", $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gte: now } }] },
-    ],
+    status: { $in: ["Confirmed", "Checked-In"] },
     rooms: {
       $elemMatch: {
         roomId: new mongoose.Types.ObjectId(roomId as any),
@@ -149,10 +146,7 @@ export const checkRoomTypeAvailability = async (
 
   const now = new Date();
   const matchStage: any = {
-    $or: [
-      { status: { $in: ["Pending", "Confirmed", "Checked-In"] } },
-      { status: "Hold", $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gte: now } }] },
-    ],
+    status: { $in: ["Confirmed", "Checked-In"] },
   };
   if (excludeBookingId) {
     matchStage._id = { $ne: excludeBookingId };
@@ -568,7 +562,11 @@ export const calculateBookingTotals = async (
 
   const nightlyDetails = await Promise.all(
     rooms.map(async (room, index) => {
-      const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
+      const roomInfo = await Room.findById(room.roomId).populate({
+        path: "roomType",
+        select: "basePrice gstId",
+        populate: { path: "gstId", select: "percentage" }
+      });
       const checkIn = new Date(room.checkInDate);
       const checkOut = new Date(room.checkOutDate);
       const nights = differenceInCalendarDays(checkOut, checkIn) || 1;
@@ -592,12 +590,19 @@ export const calculateBookingTotals = async (
       const extraBedCharge = room.hasExtraBed ? (room.extraBedCharge || (roomInfo as any)?.extraBedCharge || 0) * pricing.totalNights : 0;
       const totalRoomCharge = pricing.totalPrice + extraBedCharge;
 
+      let roomSpecificTaxPercentage = 0;
+      if (roomInfo && roomInfo.roomType && (roomInfo.roomType as any).gstId) {
+        roomSpecificTaxPercentage = (roomInfo.roomType as any).gstId.percentage || 0;
+      }
+      const taxForThisRoom = (totalRoomCharge * roomSpecificTaxPercentage) / 100;
+
       totalAdults += room.adults || 1;
       totalChildren += room.children || 0;
 
       return {
         nights,
         totalPrice: totalRoomCharge,
+        taxAmount: taxForThisRoom,
       };
     })
   );
@@ -613,7 +618,7 @@ export const calculateBookingTotals = async (
   });
 
   const discountAmount = 0;
-  const roomTaxAmount = (roomTotal * taxPercentage) / 100;
+  const roomTaxAmount = nightlyDetails.reduce((sum, d) => sum + d.taxAmount, 0);
   const taxAmount = roomTaxAmount + addonTax;
   const grandTotal = roomTotal + addonTotal + taxAmount - discountAmount;
   const paidAmount = 0;
@@ -1052,9 +1057,32 @@ export const createBooking = async (req: Request, res: Response) => {
           });
         }
 
+        const allRoomsForType = await Room.find({
+          roomType: entry.roomTypeId,
+          status: { $nin: ["Maintenance", "Blocked"] }
+        }).session(session);
+
+        const assignedRoomIds: mongoose.Types.ObjectId[] = [];
+        for (const r of allRoomsForType) {
+          const avail = await checkRoomAvailability(r._id as mongoose.Types.ObjectId, checkInDt, checkOutDt);
+          if (avail.isAvailable) {
+            assignedRoomIds.push(r._id as mongoose.Types.ObjectId);
+            if (assignedRoomIds.length === countNum) break;
+          }
+        }
+
+        if (assignedRoomIds.length < countNum) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: `Could not strictly assign enough physical rooms for ${entry.roomTypeId}. Only ${assignedRoomIds.length} available.`,
+          });
+        }
+
         for (let i = 0; i < countNum; i++) {
           validatedRooms.push({
             roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
+            roomId: assignedRoomIds[i],
             checkInDate: checkInDt,
             checkOutDate: checkOutDt,
             adults: Number(entry.adults) || 1,
@@ -1152,7 +1180,6 @@ export const createBooking = async (req: Request, res: Response) => {
           status: status ?? (advanceAmount > 0 ? "Confirmed" : "Pending"),
           source,
           externalBookingId,
-          expiresAt: (status === "Hold" || expiresAt) ? expiresAt : undefined,
           paymentStatus: advanceAmount > 0 ? "Partial" : "Pending",
           advanceAmount,
           paymentMode,
@@ -1404,7 +1431,6 @@ export const updateBooking = async (req: Request, res: Response) => {
       preferences,
       internalNotes,
       specialRequests,
-      expiresAt,
       selectedTaxId,
       purposeOfVisit,
       customerDetails,
@@ -1513,9 +1539,37 @@ export const updateBooking = async (req: Request, res: Response) => {
             });
           }
 
+          const allRoomsForType = await Room.find({
+            roomType: entry.roomTypeId,
+            status: { $nin: ["Maintenance", "Blocked"] }
+          }).session(session);
+
+          const assignedRoomIds: mongoose.Types.ObjectId[] = [];
+          for (const r of allRoomsForType) {
+            const avail = await checkRoomAvailability(
+              r._id as mongoose.Types.ObjectId, 
+              checkInDt, 
+              checkOutDt,
+              existingBooking._id as mongoose.Types.ObjectId
+            );
+            if (avail.isAvailable) {
+              assignedRoomIds.push(r._id as mongoose.Types.ObjectId);
+              if (assignedRoomIds.length === countNum) break;
+            }
+          }
+
+          if (assignedRoomIds.length < countNum) {
+            await session.abortTransaction();
+            return res.status(400).json({
+              success: false,
+              message: `Could not strictly assign enough physical rooms for ${entry.roomTypeId}. Only ${assignedRoomIds.length} available.`,
+            });
+          }
+
           for (let i = 0; i < countNum; i++) {
             validatedRooms.push({
               roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
+              roomId: assignedRoomIds[i],
               checkInDate: checkInDt,
               checkOutDate: checkOutDt,
               adults: Number(entry.adults) || 1,
@@ -1564,7 +1618,7 @@ export const updateBooking = async (req: Request, res: Response) => {
     }
 
     let targetStatus = status;
-    if (advanceAmount && advanceAmount > 0 && (existingBooking.status === "Pending" || existingBooking.status === "Hold" || status === "Pending" || status === "Hold")) {
+    if (advanceAmount && advanceAmount > 0 && (existingBooking.status === "Tentative" || status === "Tentative")) {
       targetStatus = "Confirmed";
     }
 
@@ -1578,14 +1632,6 @@ export const updateBooking = async (req: Request, res: Response) => {
         },
         { session }
       );
-    }
-
-    if (req.body.hasOwnProperty("expiresAt")) {
-      existingBooking.expiresAt = expiresAt ? new Date(expiresAt) : undefined;
-    }
-    // If status is updated to Confirmed/Checked-In, clear hold expiry
-    if (targetStatus && targetStatus !== "Hold") {
-      existingBooking.expiresAt = undefined;
     }
 
     if (source) existingBooking.source = source;
@@ -1645,13 +1691,27 @@ export const updateBooking = async (req: Request, res: Response) => {
 
     if (totals || selectedTaxId || addons) {
       const roomTotal = totals ? totals.roomTotal : existingBooking.pricingSummary.roomTotal;
-      const taxAmount = Math.round(roomTotal * resolvedTaxPercent) / 100;
-      const currentAddons = addons || existingBooking.addons || [];
-      const addonTotal = Array.isArray(currentAddons) 
-        ? currentAddons.reduce((sum: number, a: any) => sum + (Number(a.total) || 0), 0)
-        : 0;
+      let taxAmount = totals ? totals.taxAmount : (existingBooking.pricingSummary.taxAmount || 0);
+      let grandTotal = totals ? totals.grandTotal : existingBooking.pricingSummary.grandTotal;
       
-      const grandTotal = roomTotal + addonTotal + taxAmount;
+      if (!totals) {
+        let oldAddonTax = 0;
+        (existingBooking.addons || []).forEach((a: any) => {
+           oldAddonTax += ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100;
+        });
+        const roomTaxOnly = (existingBooking.pricingSummary.taxAmount || 0) - oldAddonTax;
+        
+        let newAddonTax = 0;
+        let newAddonTotal = 0;
+        (addons || existingBooking.addons || []).forEach((a: any) => {
+           newAddonTotal += (Number(a.total) || 0);
+           newAddonTax += ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100;
+        });
+        
+        taxAmount = roomTaxOnly + newAddonTax;
+        grandTotal = roomTotal + newAddonTotal + taxAmount;
+      }
+      
       existingBooking.pricingSummary = {
         ...existingBooking.pricingSummary,
         roomTotal,

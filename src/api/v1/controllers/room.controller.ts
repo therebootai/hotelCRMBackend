@@ -33,14 +33,22 @@ export const createRoom = async (
       roomData.basePrice = roomType?.basePrice ?? 0;
     }
 
-    if (roomData.gstId) {
-      const tax = await TaxGst.findById(roomData.gstId).session(session);
-      if (!tax || !tax.isActive) {
-        throw new Error("Selected tax is not active or invalid");
-      }
-    }
-
-    const newRoom = new Room(roomData);
+    const newRoom = new Room({
+      roomNumber: roomData.roomNumber,
+      roomType: roomType._id,
+      floor: roomData.floor,
+      status: roomData.status || "Active",
+      isClean: roomData.isClean ?? true,
+      hasExtraBed: roomData.hasExtraBed || false,
+      extraBedCharge: roomData.extraBedCharge || 0,
+      basePrice: roomData.basePrice || roomType.basePrice,
+      discountPercentage: roomData.discountPercentage || 0,
+      roomSize: roomData.roomSize,
+      viewType: roomData.viewType,
+      amenities: roomData.amenities,
+      description: roomData.description,
+      capacity: roomData.capacity,
+    });
     await newRoom.save({ session });
 
     await session.commitTransaction();
@@ -94,7 +102,6 @@ export const getAllRooms = async (
       Room.find(filter)
         .populate("roomType", "name basePrice")
         .populate("amenities", "name icon")
-        .populate("gstId", "name percentage")
         .sort({ roomNumber: 1 })
         .skip(skip)
         .limit(limitNumber),
@@ -129,9 +136,8 @@ export const getRoomById = async (
     const { id } = req.params;
     
     const room = await Room.findById(id)
-        .populate("roomType", "name description images basePrice")
-        .populate("amenities", "name icon")
-        .populate("gstId", "name percentage type");
+        .populate("roomType", "name basePrice")
+        .populate("amenities", "name icon");
 
     if (!room) throw new Error("Room not found");
 
@@ -165,13 +171,6 @@ export const updateRoom = async (
     if (updateData.roomType && (updateData.basePrice === undefined || updateData.basePrice === null)) {
       const roomType = await RoomType.findById(updateData.roomType).session(session);
       updateData.basePrice = roomType?.basePrice ?? 0;
-    }
-
-    if (updateData.gstId) {
-      const tax = await TaxGst.findById(updateData.gstId).session(session);
-      if (!tax || !tax.isActive) {
-        throw new Error("Selected tax is not active or invalid");
-      }
     }
 
     const updatedRoom = await Room.findByIdAndUpdate(id, updateData, {

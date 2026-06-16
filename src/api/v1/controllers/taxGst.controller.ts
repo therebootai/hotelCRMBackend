@@ -186,8 +186,15 @@ export const deleteTaxGst = async (
   try {
     const { id } = req.params;
 
-    const tax = await TaxGst.findByIdAndDelete(id).session(session);
+    const tax = await TaxGst.findById(id).session(session);
     if (!tax) throw new Error("Tax/GST configuration not found");
+
+    const inUse = await mongoose.model("RoomType").findOne({ gstId: id }).session(session);
+    if (inUse) {
+      throw new Error("Cannot delete this tax because it is currently assigned to one or more Room Categories. Please reassign those categories first.");
+    }
+
+    await TaxGst.findByIdAndDelete(id).session(session);
 
     await session.commitTransaction();
     return httpResponse(req, res, 200, "Tax/GST configuration deleted successfully");

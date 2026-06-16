@@ -5,6 +5,7 @@ export interface IRoomType extends Document {
   description?: string;
   basePrice: number;
   isActive: boolean;
+  gstId?: mongoose.Types.ObjectId;
 }
 
 const RoomTypeSchema = new Schema<IRoomType>(
@@ -13,6 +14,7 @@ const RoomTypeSchema = new Schema<IRoomType>(
     description: { type: String, trim: true },
     basePrice: { type: Number, required: true, min: 0 },
     isActive: { type: Boolean, default: true },
+    gstId: { type: Schema.Types.ObjectId, ref: "TaxGst" },
   },
   { timestamps: true },
 );

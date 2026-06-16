@@ -11,7 +11,6 @@ export interface IRoom extends Document {
   extraBedCharge: number;
   basePrice: number;
   discountPercentage: number;
-  gstId?: mongoose.Types.ObjectId;
   roomSize?: number;
   viewType?: string;
   amenities: mongoose.Types.ObjectId[];
@@ -33,7 +32,6 @@ const RoomSchema = new Schema<IRoom>(
 
     basePrice: { type: Number, default: 0 },
     discountPercentage: { type: Number, default: 0 },
-    gstId: { type: Schema.Types.ObjectId, ref: "TaxGst" },
     
     roomSize: { type: Number },
     viewType: { type: String },

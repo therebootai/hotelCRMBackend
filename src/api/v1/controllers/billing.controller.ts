@@ -12,7 +12,8 @@ import { recordGstEntry } from "../services/gstLedger.service";
 import { PaymentMode } from "../models/paymentLedger.model";
 import { sendNotificationToRole } from "../services/notification.service";
 
-import { differenceInDays, startOfDay } from "date-fns";
+import { differenceInDays, startOfDay, format } from "date-fns";
+import { getLogoBase64, getQrBase64 } from "../../../utils/assets";
 
 
 
@@ -72,7 +73,11 @@ export const processCheckout = async (req: Request, res: Response) => {
     const facilitiesTotal = (facilityCharges || []).reduce((acc: number, f: any) => acc + (Number(f.totalFacilityCharge) || 0), 0);
     const subTotal = totalRoomCharges + servicesTotal + facilitiesTotal + Number(restaurantCharges || 0);
     const taxAmt = parseFloat(((subTotal * Number(taxPercentage || 0)) / 100).toFixed(2));
-    const grandTotal = parseFloat((subTotal + taxAmt - Number(discount || 0)).toFixed(2));
+    
+    // Extract standalone damage amount so it doesn't incur tax
+    const damageCharges = Number(checkoutVerification?.damageAmount) || 0;
+    
+    const grandTotal = parseFloat((subTotal + taxAmt + damageCharges - Number(discount || 0)).toFixed(2));
     const advanceDeducted = checkInData.totalAdvanceAmount || checkInData.paymentSummary?.totalPaid || 0;
     const netPayable = parseFloat(Math.max(0, grandTotal - advanceDeducted).toFixed(2));
 
@@ -96,6 +101,7 @@ export const processCheckout = async (req: Request, res: Response) => {
         totalFacilityCharges: facilitiesTotal,
         restaurantCharges: Number(restaurantCharges || 0),
         extraServices: extraServices || [],
+        damageCharges,
         subTotal,
         taxPercentage: Number(taxPercentage || 0),
         taxAmount: taxAmt,
@@ -125,6 +131,7 @@ export const processCheckout = async (req: Request, res: Response) => {
         totalFacilityCharges: facilitiesTotal,
         restaurantCharges: Number(restaurantCharges || 0),
         extraServices: extraServices || [],
+        damageCharges,
         subTotal,
         taxPercentage: Number(taxPercentage || 0),
         taxAmount: taxAmt,
@@ -651,11 +658,20 @@ function buildInvoiceHtml(bill: any) {
 <body style="padding:14px;">
 
   <!-- Hotel Header -->
-  <div style="text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px;">
-    <h1 style="font-size:20px;font-weight:900;letter-spacing:1px;color:#111;">${HOTEL_NAME}</h1>
-    <p style="font-size:10px;color:#444;margin-top:3px;">${HOTEL_ADDRESS}</p>
-    <p style="font-size:10px;color:#444;margin-top:2px;">GST: ${HOTEL_GST} &nbsp;|&nbsp; Tel: ${HOTEL_PHONE}</p>
-    <p style="font-size:12px;font-weight:900;margin-top:8px;text-transform:uppercase;letter-spacing:1px;color:#111;">TAX INVOICE</p>
+  <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px;">
+    <div style="width:70px;">
+      <img src="${getLogoBase64()}" alt="Logo" style="width:100%;height:auto;display:block;" />
+    </div>
+    <div style="text-align:center;flex:1;">
+      <h1 style="font-size:20px;font-weight:900;letter-spacing:1px;color:#111;">${HOTEL_NAME}</h1>
+      <p style="font-size:10px;color:#444;margin-top:3px;">${HOTEL_ADDRESS}</p>
+      <p style="font-size:10px;color:#444;margin-top:2px;">GST: ${HOTEL_GST} &nbsp;|&nbsp; Tel: ${HOTEL_PHONE}</p>
+      <p style="font-size:12px;font-weight:900;margin-top:8px;text-transform:uppercase;letter-spacing:1px;color:#111;">TAX INVOICE</p>
+    </div>
+    <div style="width:70px;text-align:center;">
+      <img src="${getQrBase64()}" alt="QR Code" style="width:100%;height:auto;display:block;margin-bottom:2px;" />
+      <span style="font-size:6px;font-weight:bold;">SCAN FOR LOCATION</span>
+    </div>
   </div>
 
   <!-- Invoice Meta & Bill To -->
@@ -729,6 +745,7 @@ function buildInvoiceHtml(bill: any) {
       <p class="section-title">Calculation Summary</p>
       <div class="calc-row"><span>Room Charges</span><span>₹${(bill.totalRoomCharges || 0).toLocaleString("en-IN")}</span></div>
       ${extraServicesTotal > 0 ? `<div class="calc-row"><span>Extra Services</span><span>₹${extraServicesTotal.toLocaleString("en-IN")}</span></div>` : ""}
+      ${(bill.damageCharges || 0) > 0 ? `<div class="calc-row"><span>Damage Charges</span><span>₹${bill.damageCharges.toLocaleString("en-IN")}</span></div>` : ""}
       ${(bill.otherCharges || 0) > 0 ? `<div class="calc-row"><span>Other Charges</span><span>₹${(bill.otherCharges || 0).toLocaleString("en-IN")}</span></div>` : ""}
       <div class="calc-row" style="border-top:1px solid #eee;margin-top:4px;padding-top:4px;"><span>Sub Total</span><span>₹${(bill.subTotal || 0).toLocaleString("en-IN")}</span></div>
       ${(bill.taxBreakdown?.totalTax || 0) > 0 ? `

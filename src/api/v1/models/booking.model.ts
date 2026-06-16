@@ -119,13 +119,12 @@ export interface IBooking extends Document {
 
   // Status
   status:
-    | "Pending"
+    | "Tentative"
     | "Confirmed"
     | "Checked-In"
     | "Checked-Out"
     | "Cancelled"
-    | "No-Show"
-    | "Hold";
+    | "No-Show";
 
   // Booking Source
   source:
@@ -143,7 +142,7 @@ export interface IBooking extends Document {
   externalBookingId?: string;
 
   // Booking Hold Expiry
-  expiresAt?: Date;
+
 
   // Payment Tracking
   paymentStatus: "Pending" | "Partial" | "Paid" | "Refunded";
@@ -288,15 +287,14 @@ const BookingSchema = new Schema<IBooking>(
     status: {
       type: String,
       enum: [
-        "Pending",
+        "Tentative",
         "Confirmed",
         "Checked-In",
         "Checked-Out",
         "Cancelled",
         "No-Show",
-        "Hold",
       ],
-      default: "Pending",
+      default: "Tentative",
     },
 
     // Booking Source
@@ -320,7 +318,7 @@ const BookingSchema = new Schema<IBooking>(
     externalBookingId: { type: String },
 
     // Booking Hold Expiry
-    expiresAt: { type: Date },
+
 
     // Payment Tracking
     paymentStatus: {
