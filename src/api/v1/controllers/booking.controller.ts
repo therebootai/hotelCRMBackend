@@ -91,10 +91,7 @@ export const checkRoomAvailability = async (
 
   const now = new Date();
   const bookingQuery: any = {
-    $or: [
-      { status: { $in: ["Pending", "Confirmed", "Checked-In"] } },
-      { status: "Hold", $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gte: now } }] },
-    ],
+    status: { $in: ["Confirmed", "Checked-In"] },
     rooms: {
       $elemMatch: {
         roomId: new mongoose.Types.ObjectId(roomId as any),
@@ -149,10 +146,7 @@ export const checkRoomTypeAvailability = async (
 
   const now = new Date();
   const matchStage: any = {
-    $or: [
-      { status: { $in: ["Pending", "Confirmed", "Checked-In"] } },
-      { status: "Hold", $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gte: now } }] },
-    ],
+    status: { $in: ["Confirmed", "Checked-In"] },
   };
   if (excludeBookingId) {
     matchStage._id = { $ne: excludeBookingId };
@@ -1063,9 +1057,32 @@ export const createBooking = async (req: Request, res: Response) => {
           });
         }
 
+        const allRoomsForType = await Room.find({
+          roomType: entry.roomTypeId,
+          status: { $nin: ["Maintenance", "Blocked"] }
+        }).session(session);
+
+        const assignedRoomIds: mongoose.Types.ObjectId[] = [];
+        for (const r of allRoomsForType) {
+          const avail = await checkRoomAvailability(r._id as mongoose.Types.ObjectId, checkInDt, checkOutDt);
+          if (avail.isAvailable) {
+            assignedRoomIds.push(r._id as mongoose.Types.ObjectId);
+            if (assignedRoomIds.length === countNum) break;
+          }
+        }
+
+        if (assignedRoomIds.length < countNum) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: `Could not strictly assign enough physical rooms for ${entry.roomTypeId}. Only ${assignedRoomIds.length} available.`,
+          });
+        }
+
         for (let i = 0; i < countNum; i++) {
           validatedRooms.push({
             roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
+            roomId: assignedRoomIds[i],
             checkInDate: checkInDt,
             checkOutDate: checkOutDt,
             adults: Number(entry.adults) || 1,
@@ -1524,9 +1541,37 @@ export const updateBooking = async (req: Request, res: Response) => {
             });
           }
 
+          const allRoomsForType = await Room.find({
+            roomType: entry.roomTypeId,
+            status: { $nin: ["Maintenance", "Blocked"] }
+          }).session(session);
+
+          const assignedRoomIds: mongoose.Types.ObjectId[] = [];
+          for (const r of allRoomsForType) {
+            const avail = await checkRoomAvailability(
+              r._id as mongoose.Types.ObjectId, 
+              checkInDt, 
+              checkOutDt,
+              existingBooking._id as mongoose.Types.ObjectId
+            );
+            if (avail.isAvailable) {
+              assignedRoomIds.push(r._id as mongoose.Types.ObjectId);
+              if (assignedRoomIds.length === countNum) break;
+            }
+          }
+
+          if (assignedRoomIds.length < countNum) {
+            await session.abortTransaction();
+            return res.status(400).json({
+              success: false,
+              message: `Could not strictly assign enough physical rooms for ${entry.roomTypeId}. Only ${assignedRoomIds.length} available.`,
+            });
+          }
+
           for (let i = 0; i < countNum; i++) {
             validatedRooms.push({
               roomType: new mongoose.Types.ObjectId(entry.roomTypeId),
+              roomId: assignedRoomIds[i],
               checkInDate: checkInDt,
               checkOutDate: checkOutDt,
               adults: Number(entry.adults) || 1,
@@ -1575,7 +1620,7 @@ export const updateBooking = async (req: Request, res: Response) => {
     }
 
     let targetStatus = status;
-    if (advanceAmount && advanceAmount > 0 && (existingBooking.status === "Pending" || existingBooking.status === "Hold" || status === "Pending" || status === "Hold")) {
+    if (advanceAmount && advanceAmount > 0 && (existingBooking.status === "Tentative" || status === "Tentative")) {
       targetStatus = "Confirmed";
     }
 

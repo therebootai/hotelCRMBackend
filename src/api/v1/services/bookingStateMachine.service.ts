@@ -7,22 +7,20 @@ import { CheckIn } from "../models/checkin.model";
 import { sendNotificationToRole } from "./notification.service";
 
 export type BookingStatus =
-  | "Pending"
+  | "Tentative"
   | "Confirmed"
   | "Checked-In"
   | "Checked-Out"
   | "Cancelled"
-  | "No-Show"
-  | "Hold";
+  | "No-Show";
 
 const ALLOWED_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
-  Pending: ["Confirmed", "Cancelled", "No-Show", "Hold"],
-  Confirmed: ["Checked-In", "Cancelled", "No-Show", "Hold"],
+  Tentative: ["Confirmed", "Cancelled", "No-Show"],
+  Confirmed: ["Checked-In", "Cancelled", "No-Show"],
   "Checked-In": ["Checked-Out"],
   "Checked-Out": [],
   Cancelled: [],
   "No-Show": [],
-  Hold: ["Confirmed", "Cancelled", "Pending"],
 };
 
 export const transitionBookingState = async (

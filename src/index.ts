@@ -34,11 +34,13 @@ import notificationRoutes from "./api/v1/routes/notification.route";
 import reportingRoutes from "./api/v1/routes/reporting.route";
 
 import { initCheckoutReminderCron } from "./cron/checkoutReminder.cron";
+import { initNoShowCron } from "./cron/noShow.cron";
 
 const app = express();
 
-// Initialize Cron Jobs
+// Initialize cron jobs
 initCheckoutReminderCron();
+initNoShowCron();
 
 app.use(
   cors({
