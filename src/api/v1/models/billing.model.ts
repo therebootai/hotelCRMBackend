@@ -152,6 +152,7 @@ export interface IBilling extends Document {
   packageCharges: IPackageCharge[];
 
   otherCharges: number;
+  damageCharges: number;
 
   subTotal: number;
 
@@ -324,6 +325,11 @@ const BillingSchema = new Schema<IBilling>(
     ],
 
     otherCharges: {
+      type: Number,
+      default: 0,
+    },
+
+    damageCharges: {
       type: Number,
       default: 0,
     },

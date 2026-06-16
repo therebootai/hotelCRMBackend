@@ -72,7 +72,11 @@ export const processCheckout = async (req: Request, res: Response) => {
     const facilitiesTotal = (facilityCharges || []).reduce((acc: number, f: any) => acc + (Number(f.totalFacilityCharge) || 0), 0);
     const subTotal = totalRoomCharges + servicesTotal + facilitiesTotal + Number(restaurantCharges || 0);
     const taxAmt = parseFloat(((subTotal * Number(taxPercentage || 0)) / 100).toFixed(2));
-    const grandTotal = parseFloat((subTotal + taxAmt - Number(discount || 0)).toFixed(2));
+    
+    // Extract standalone damage amount so it doesn't incur tax
+    const damageCharges = Number(checkoutVerification?.damageAmount) || 0;
+    
+    const grandTotal = parseFloat((subTotal + taxAmt + damageCharges - Number(discount || 0)).toFixed(2));
     const advanceDeducted = checkInData.totalAdvanceAmount || checkInData.paymentSummary?.totalPaid || 0;
     const netPayable = parseFloat(Math.max(0, grandTotal - advanceDeducted).toFixed(2));
 
@@ -96,6 +100,7 @@ export const processCheckout = async (req: Request, res: Response) => {
         totalFacilityCharges: facilitiesTotal,
         restaurantCharges: Number(restaurantCharges || 0),
         extraServices: extraServices || [],
+        damageCharges,
         subTotal,
         taxPercentage: Number(taxPercentage || 0),
         taxAmount: taxAmt,
@@ -125,6 +130,7 @@ export const processCheckout = async (req: Request, res: Response) => {
         totalFacilityCharges: facilitiesTotal,
         restaurantCharges: Number(restaurantCharges || 0),
         extraServices: extraServices || [],
+        damageCharges,
         subTotal,
         taxPercentage: Number(taxPercentage || 0),
         taxAmount: taxAmt,
@@ -729,6 +735,7 @@ function buildInvoiceHtml(bill: any) {
       <p class="section-title">Calculation Summary</p>
       <div class="calc-row"><span>Room Charges</span><span>₹${(bill.totalRoomCharges || 0).toLocaleString("en-IN")}</span></div>
       ${extraServicesTotal > 0 ? `<div class="calc-row"><span>Extra Services</span><span>₹${extraServicesTotal.toLocaleString("en-IN")}</span></div>` : ""}
+      ${(bill.damageCharges || 0) > 0 ? `<div class="calc-row"><span>Damage Charges</span><span>₹${bill.damageCharges.toLocaleString("en-IN")}</span></div>` : ""}
       ${(bill.otherCharges || 0) > 0 ? `<div class="calc-row"><span>Other Charges</span><span>₹${(bill.otherCharges || 0).toLocaleString("en-IN")}</span></div>` : ""}
       <div class="calc-row" style="border-top:1px solid #eee;margin-top:4px;padding-top:4px;"><span>Sub Total</span><span>₹${(bill.subTotal || 0).toLocaleString("en-IN")}</span></div>
       ${(bill.taxBreakdown?.totalTax || 0) > 0 ? `
