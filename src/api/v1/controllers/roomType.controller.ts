@@ -17,7 +17,7 @@ export const createRoomType = async (
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { name, description, basePrice } = req.body;
+    const { name, description, basePrice, gstId } = req.body;
     let uploadedImageUrls: string[] = [];
 
     const existingRoomType = await RoomType.findOne({ name }).session(session);
@@ -29,6 +29,7 @@ export const createRoomType = async (
       name,
       description,
       basePrice,
+      gstId,
       images: uploadedImageUrls,
     });
 
@@ -62,7 +63,9 @@ export const getAllRoomTypes = async (
     const { activeOnly } = req.query;
     const filter = activeOnly === "true" ? { isActive: true } : {};
 
-    const roomTypes = await RoomType.find(filter).sort({ createdAt: -1 });
+    const roomTypes = await RoomType.find(filter)
+        .populate("gstId", "name percentage type")
+        .sort({ createdAt: -1 });
 
     return httpResponse(
       req,
@@ -86,7 +89,7 @@ export const getRoomTypeById = async (
 ) => {
   try {
     const { id } = req.params;
-    const roomType = await RoomType.findById(id);
+    const roomType = await RoomType.findById(id).populate("gstId", "name percentage type");
 
     if (!roomType) throw new Error("Room Type not found");
 
@@ -114,7 +117,7 @@ export const updateRoomType = async (
   session.startTransaction();
   try {
     const { id } = req.params;
-    const { name, description, basePrice } = req.body;
+    const { name, description, basePrice, gstId } = req.body;
 
     const roomType = await RoomType.findById(id).session(session);
     if (!roomType) throw new Error("Room Type not found");
@@ -126,6 +129,7 @@ export const updateRoomType = async (
       roomType.basePrice = basePrice;
       await Room.updateMany({ roomType: id }, { $set: { basePrice } }, { session });
     }
+    if (gstId !== undefined) roomType.gstId = gstId;
 
     await roomType.save({ session });
     await session.commitTransaction();

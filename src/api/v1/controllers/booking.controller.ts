@@ -568,7 +568,11 @@ export const calculateBookingTotals = async (
 
   const nightlyDetails = await Promise.all(
     rooms.map(async (room, index) => {
-      const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
+      const roomInfo = await Room.findById(room.roomId).populate({
+        path: "roomType",
+        select: "basePrice gstId",
+        populate: { path: "gstId", select: "percentage" }
+      });
       const checkIn = new Date(room.checkInDate);
       const checkOut = new Date(room.checkOutDate);
       const nights = differenceInCalendarDays(checkOut, checkIn) || 1;
@@ -592,12 +596,19 @@ export const calculateBookingTotals = async (
       const extraBedCharge = room.hasExtraBed ? (room.extraBedCharge || (roomInfo as any)?.extraBedCharge || 0) * pricing.totalNights : 0;
       const totalRoomCharge = pricing.totalPrice + extraBedCharge;
 
+      let roomSpecificTaxPercentage = 0;
+      if (roomInfo && roomInfo.roomType && (roomInfo.roomType as any).gstId) {
+        roomSpecificTaxPercentage = (roomInfo.roomType as any).gstId.percentage || 0;
+      }
+      const taxForThisRoom = (totalRoomCharge * roomSpecificTaxPercentage) / 100;
+
       totalAdults += room.adults || 1;
       totalChildren += room.children || 0;
 
       return {
         nights,
         totalPrice: totalRoomCharge,
+        taxAmount: taxForThisRoom,
       };
     })
   );
@@ -613,7 +624,7 @@ export const calculateBookingTotals = async (
   });
 
   const discountAmount = 0;
-  const roomTaxAmount = (roomTotal * taxPercentage) / 100;
+  const roomTaxAmount = nightlyDetails.reduce((sum, d) => sum + d.taxAmount, 0);
   const taxAmount = roomTaxAmount + addonTax;
   const grandTotal = roomTotal + addonTotal + taxAmount - discountAmount;
   const paidAmount = 0;
@@ -1645,13 +1656,27 @@ export const updateBooking = async (req: Request, res: Response) => {
 
     if (totals || selectedTaxId || addons) {
       const roomTotal = totals ? totals.roomTotal : existingBooking.pricingSummary.roomTotal;
-      const taxAmount = Math.round(roomTotal * resolvedTaxPercent) / 100;
-      const currentAddons = addons || existingBooking.addons || [];
-      const addonTotal = Array.isArray(currentAddons) 
-        ? currentAddons.reduce((sum: number, a: any) => sum + (Number(a.total) || 0), 0)
-        : 0;
+      let taxAmount = totals ? totals.taxAmount : (existingBooking.pricingSummary.taxAmount || 0);
+      let grandTotal = totals ? totals.grandTotal : existingBooking.pricingSummary.grandTotal;
       
-      const grandTotal = roomTotal + addonTotal + taxAmount;
+      if (!totals) {
+        let oldAddonTax = 0;
+        (existingBooking.addons || []).forEach((a: any) => {
+           oldAddonTax += ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100;
+        });
+        const roomTaxOnly = (existingBooking.pricingSummary.taxAmount || 0) - oldAddonTax;
+        
+        let newAddonTax = 0;
+        let newAddonTotal = 0;
+        (addons || existingBooking.addons || []).forEach((a: any) => {
+           newAddonTotal += (Number(a.total) || 0);
+           newAddonTax += ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100;
+        });
+        
+        taxAmount = roomTaxOnly + newAddonTax;
+        grandTotal = roomTotal + newAddonTotal + taxAmount;
+      }
+      
       existingBooking.pricingSummary = {
         ...existingBooking.pricingSummary,
         roomTotal,
