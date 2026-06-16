@@ -12,7 +12,8 @@ import { recordGstEntry } from "../services/gstLedger.service";
 import { PaymentMode } from "../models/paymentLedger.model";
 import { sendNotificationToRole } from "../services/notification.service";
 
-import { differenceInDays, startOfDay } from "date-fns";
+import { differenceInDays, startOfDay, format } from "date-fns";
+import { getLogoBase64, getQrBase64 } from "../../../utils/assets";
 
 
 
@@ -657,11 +658,20 @@ function buildInvoiceHtml(bill: any) {
 <body style="padding:14px;">
 
   <!-- Hotel Header -->
-  <div style="text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px;">
-    <h1 style="font-size:20px;font-weight:900;letter-spacing:1px;color:#111;">${HOTEL_NAME}</h1>
-    <p style="font-size:10px;color:#444;margin-top:3px;">${HOTEL_ADDRESS}</p>
-    <p style="font-size:10px;color:#444;margin-top:2px;">GST: ${HOTEL_GST} &nbsp;|&nbsp; Tel: ${HOTEL_PHONE}</p>
-    <p style="font-size:12px;font-weight:900;margin-top:8px;text-transform:uppercase;letter-spacing:1px;color:#111;">TAX INVOICE</p>
+  <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px;">
+    <div style="width:70px;">
+      <img src="${getLogoBase64()}" alt="Logo" style="width:100%;height:auto;display:block;" />
+    </div>
+    <div style="text-align:center;flex:1;">
+      <h1 style="font-size:20px;font-weight:900;letter-spacing:1px;color:#111;">${HOTEL_NAME}</h1>
+      <p style="font-size:10px;color:#444;margin-top:3px;">${HOTEL_ADDRESS}</p>
+      <p style="font-size:10px;color:#444;margin-top:2px;">GST: ${HOTEL_GST} &nbsp;|&nbsp; Tel: ${HOTEL_PHONE}</p>
+      <p style="font-size:12px;font-weight:900;margin-top:8px;text-transform:uppercase;letter-spacing:1px;color:#111;">TAX INVOICE</p>
+    </div>
+    <div style="width:70px;text-align:center;">
+      <img src="${getQrBase64()}" alt="QR Code" style="width:100%;height:auto;display:block;margin-bottom:2px;" />
+      <span style="font-size:6px;font-weight:bold;">SCAN FOR LOCATION</span>
+    </div>
   </div>
 
   <!-- Invoice Meta & Bill To -->

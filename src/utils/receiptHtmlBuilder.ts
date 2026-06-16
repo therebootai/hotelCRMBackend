@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { getLogoBase64, getQrBase64 } from "./assets";
 
 export function buildReceiptHtml(booking: any) {
   const roomTypeNames = booking.rooms?.map((r: any) => r.roomType?.name || r.roomType).join(", ") || "N/A";
@@ -47,8 +48,8 @@ export function buildReceiptHtml(booking: any) {
       <div class="w-[210mm] bg-white text-black p-8 mx-auto relative text-xs">
         <!-- Header section -->
         <div class="flex justify-between items-center mb-2">
-          <div class="w-24 h-24 border border-gray-300 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400">
-            LOGO
+          <div class="w-24 h-24 flex items-center justify-center">
+            <img src="${getLogoBase64()}" alt="Logo" class="w-full h-full object-contain" />
           </div>
           <div class="flex-1 text-center px-4">
             <h1 class="text-4xl font-bold text-[#0b1b3d] tracking-wider mb-2">SIDDHARAJ RESORT</h1>
@@ -60,7 +61,9 @@ export function buildReceiptHtml(booking: any) {
             <p class="text-gray-600 text-[10px]">CIN - U45400WB2015PTC207217</p>
           </div>
           <div class="w-24 flex flex-col items-center">
-            <div class="w-20 h-20 border border-gray-300 flex items-center justify-center bg-gray-50 text-gray-400 mb-1">QR</div>
+            <div class="w-20 h-20 mb-1">
+              <img src="${getQrBase64()}" alt="QR Code" class="w-full h-full object-contain" />
+            </div>
             <span class="text-[8px] font-bold">SCAN FOR LOCATION</span>
           </div>
         </div>
