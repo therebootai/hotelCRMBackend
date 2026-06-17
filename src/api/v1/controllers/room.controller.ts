@@ -48,6 +48,8 @@ export const createRoom = async (
       amenities: roomData.amenities,
       description: roomData.description,
       capacity: roomData.capacity,
+      maxAdults: roomData.maxAdults,
+      maxChildren: roomData.maxChildren,
     });
     await newRoom.save({ session });
 
