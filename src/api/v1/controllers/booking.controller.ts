@@ -658,6 +658,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
       highFloor,
       nearLift,
       floor,
+      excludeBookingId,
     } = req.query;
 
     if (!checkIn || !checkOut) {
@@ -727,7 +728,8 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
           new mongoose.Types.ObjectId(rtId),
           checkInDate,
           checkOutDate,
-          0
+          0,
+          excludeBookingId ? new mongoose.Types.ObjectId(excludeBookingId as string) : undefined
         );
         typeAvailMap.set(rtId, ta.availableCount);
       })
@@ -740,7 +742,8 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
         const availability = await checkRoomAvailability(
           room._id,
           checkInDate,
-          checkOutDate
+          checkOutDate,
+          excludeBookingId ? new mongoose.Types.ObjectId(excludeBookingId as string) : undefined
         );
 
         // Also enforce type-level slot count (catches type-based bookings with no roomId)
