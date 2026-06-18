@@ -124,13 +124,8 @@ export const updateBookingSchema = z.object({
   }),
   body: z.object({
     status: z.enum([
-      "Pending",
-      "Confirmed",
-      "Checked-In",
-      "Checked-Out",
-      "Cancelled",
-      "No-Show",
-      "Hold"
+      "Tentative",
+      "Confirmed"
     ]).optional(),
     bookingCategory: z.enum(["Room Stay", "Day Access", "Event", "Banquet"]).optional(),
     bookingType: z.enum(["Individual", "Corporate"]).optional(),
