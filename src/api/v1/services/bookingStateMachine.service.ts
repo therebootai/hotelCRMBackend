@@ -24,7 +24,7 @@ const ALLOWED_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
 };
 
 export const transitionBookingState = async (
-  bookingId: string | mongoose.Types.ObjectId,
+  bookingOrId: string | mongoose.Types.ObjectId | any,
   newState: BookingStatus,
   context: { userId: string | mongoose.Types.ObjectId; notes?: string },
   opts?: { session?: ClientSession }
@@ -37,7 +37,10 @@ export const transitionBookingState = async (
   }
 
   try {
-    const booking = await Booking.findById(bookingId).session(session);
+    const booking = (bookingOrId && typeof bookingOrId === "object" && typeof bookingOrId.save === "function")
+      ? bookingOrId
+      : await Booking.findById(bookingOrId).session(session);
+      
     if (!booking) throw new Error("Booking not found");
 
     const oldState = booking.status as BookingStatus;

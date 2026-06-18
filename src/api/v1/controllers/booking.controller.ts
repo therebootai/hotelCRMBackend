@@ -1624,7 +1624,7 @@ export const updateBooking = async (req: Request, res: Response) => {
 
     if (targetStatus && targetStatus !== existingBooking.status) {
       await transitionBookingState(
-        existingBooking._id,
+        existingBooking,
         targetStatus as any,
         {
           userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
@@ -1821,7 +1821,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
     }
 
     const cancelledBooking = await transitionBookingState(
-      booking._id,
+      booking,
       "Cancelled",
       {
         userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
