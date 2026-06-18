@@ -2202,3 +2202,37 @@ export const emailReceipt = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: error.message || "Failed to send receipt" });
   }
 };
+
+export const whatsappReceipt = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ success: false, message: "Phone number is required" });
+    }
+
+    const booking = await Booking.findById(id).populate("customerId");
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const name = booking.bookingContact?.name || (booking.customerId as any)?.name || "Guest";
+    const checkInDate = booking.overallCheckInDate || new Date();
+    const checkOutDate = booking.overallCheckOutDate || new Date();
+    
+    await waBridgeService.sendBookingConfirmation(
+      phone,
+      name,
+      booking.bookingId,
+      checkInDate,
+      checkOutDate
+    );
+
+    res.status(200).json({ success: true, message: "WhatsApp message sent successfully" });
+  } catch (error: any) {
+    console.error("whatsappReceipt error:", error);
+    res.status(500).json({ success: false, message: error.message || "Failed to send WhatsApp message" });
+  }
+};
