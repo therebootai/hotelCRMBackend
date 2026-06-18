@@ -1393,6 +1393,13 @@ export const updateBooking = async (req: Request, res: Response) => {
       });
     }
 
+    if (!["Tentative", "Confirmed"].includes(existingBooking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot edit booking in '${existingBooking.status}' status. Only Tentative and Confirmed bookings can be edited.`,
+      });
+    }
+
     let updatedRooms: IBookedRoom[] | undefined = undefined;
     let totals: any = null;
 
