@@ -308,7 +308,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           throw new Error(`Room is already assigned to another booking (${conflictingBooking.bookingId}) for these dates`);
         }
 
-        const roomInfo = await Room.findById(roomId).populate("roomType", "basePrice").session(mongoSession);
+        const roomInfo = await Room.findById(roomId).populate({ path: "roomType", populate: { path: "gstId" } }).session(mongoSession);
+        const rt: any = roomInfo?.roomType;
+        const taxPercentage = rt?.gstId?.percentage || 0;
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
@@ -316,6 +318,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
           originalPrice: sel.originalPrice || sel.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
           appliedPrice: sel.appliedPrice || sel.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
         roomIds.push(roomId);
@@ -323,8 +326,10 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     } else {
       // Day Access: process room selections as flat-priced add-ons
       for (const sel of selections) {
-        const roomInfo = await Room.findById(sel.roomId || sel._id).populate("roomType", "basePrice").session(mongoSession);
         const roomId = sel.roomId || sel._id;
+        const roomInfo = await Room.findById(roomId).populate({ path: "roomType", populate: { path: "gstId" } }).session(mongoSession);
+        const rt: any = roomInfo?.roomType;
+        const taxPercentage = rt?.gstId?.percentage || 0;
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
@@ -332,6 +337,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
           originalPrice: sel.originalPrice || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
           appliedPrice: sel.appliedPrice || sel.originalPrice || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
         roomIds.push(roomId);
@@ -343,23 +349,15 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     // Recalculate actual pricing from assigned rooms (Room Stay only)
     if (!isDayAccess && roomDetails.length > 0) {
-      const actualRoomTotal = roomDetails.reduce(
-        (sum: number, r: any) => sum + (r.appliedPrice || 0) * nights,
-        0,
-      );
+      let actualRoomTotal = 0;
+      let actualTaxAmount = 0;
 
-      // Resolve tax percentage
-      let taxPct = 12;
-      if (booking?.taxGstId) {
-        try {
-          const taxDoc = await TaxGst.findById(booking?.taxGstId).session(mongoSession).lean() as any;
-          if (taxDoc?.percentage) {
-            taxPct = taxDoc.percentage;
-          }
-        } catch (_) { /* use default 12% */ }
-      } else if ((booking?.pricingSummary as any)?.taxPercentage) {
-        taxPct = (booking?.pricingSummary as any).taxPercentage;
-      }
+      roomDetails.forEach((r: any) => {
+        const roomBaseTotal = (r.appliedPrice || 0) * nights;
+        actualRoomTotal += roomBaseTotal;
+        const taxPct = r._taxPercentage || 0;
+        actualTaxAmount += roomBaseTotal * (taxPct / 100);
+      });
 
       const combinedAddons = booking ? (booking.addons || []) : (extraServices || []);
 
@@ -373,7 +371,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         0,
       );
       
-      const actualTaxAmount = Math.round((actualRoomTotal * taxPct / 100) + addonTaxTotal);
+      actualTaxAmount = Math.round(actualTaxAmount + addonTaxTotal);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
       const paidSoFar = (booking?.pricingSummary as any)?.paidAmount || 0;
       
@@ -387,7 +385,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
             $set: {
               "pricingSummary.roomTotal": actualRoomTotal,
               "pricingSummary.taxAmount": actualTaxAmount,
-              "pricingSummary.taxPercentage": taxPct,
+              "pricingSummary.taxPercentage": 0, // Legacy field, keeping for schema compatibility
               "pricingSummary.grandTotal": actualGrandTotal,
               "pricingSummary.dueAmount": Math.max(0, actualGrandTotal - paidSoFar),
             },
@@ -400,7 +398,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           ...(booking.pricingSummary as any),
           roomTotal: actualRoomTotal,
           taxAmount: actualTaxAmount,
-          taxPercentage: taxPct,
+          taxPercentage: 0,
           grandTotal: actualGrandTotal,
           dueAmount: Math.max(0, actualGrandTotal - paidSoFar),
         };

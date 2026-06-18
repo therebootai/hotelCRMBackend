@@ -48,6 +48,8 @@ export const createRoom = async (
       amenities: roomData.amenities,
       description: roomData.description,
       capacity: roomData.capacity,
+      maxAdults: roomData.maxAdults,
+      maxChildren: roomData.maxChildren,
     });
     await newRoom.save({ session });
 
@@ -71,7 +73,7 @@ export const getAllRooms = async (
   next: NextFunction,
 ) => {
   try {
-    const { page = "1", limit = "10", status, roomType, building, availableOnly } = req.query;
+    const { page = "1", limit = "10", status, roomType, building, availableOnly, checkIn, checkOut, excludeBookingId } = req.query;
 
     const pageNumber = parseInt(page as string, 10);
     const limitNumber = parseInt(limit as string, 10);
@@ -83,8 +85,24 @@ export const getAllRooms = async (
     if (building) filter.building = building;
 
     if (availableOnly === 'true') {
-      const activeCheckIns = await CheckIn.find({ status: "Active" }).select("roomDetails.roomId");
       const occupiedRoomIds = new Set<string>();
+      
+      const checkInDate = checkIn ? new Date(checkIn as string) : new Date();
+      const checkOutDate = checkOut ? new Date(checkOut as string) : new Date(new Date().getTime() + 86400000);
+
+      const checkInQuery: any = {
+        status: "Active",
+        $or: [
+          {
+            checkInTime: { $lt: checkOutDate },
+            expectedCheckOutTime: { $gt: checkInDate },
+          },
+        ],
+      };
+      // For check-ins associated with the booking we are trying to check in, ignore them? 
+      // Active check-ins are physical occupants. We should always exclude them.
+      
+      const activeCheckIns = await CheckIn.find(checkInQuery).select("roomDetails.roomId");
       activeCheckIns.forEach(ci => {
         if (ci.roomDetails) {
           ci.roomDetails.forEach(rd => {
@@ -92,6 +110,33 @@ export const getAllRooms = async (
           });
         }
       });
+
+      const bookingQuery: any = {
+        status: { $in: ["Confirmed", "Checked-In"] },
+        $or: [
+          {
+            "rooms.checkInDate": { $lt: checkOutDate },
+            "rooms.checkOutDate": { $gt: checkInDate },
+          },
+        ],
+      };
+
+      if (excludeBookingId) {
+        bookingQuery._id = { $ne: new mongoose.Types.ObjectId(excludeBookingId as string) };
+      }
+
+      const activeBookings = await Booking.find(bookingQuery).select("rooms");
+      activeBookings.forEach(bk => {
+        if (bk.rooms) {
+          bk.rooms.forEach((r: any) => {
+            // Check specific room dates just in case they differ from overall booking dates
+            if (r.roomId && r.checkInDate < checkOutDate && r.checkOutDate > checkInDate) {
+              occupiedRoomIds.add(r.roomId.toString());
+            }
+          });
+        }
+      });
+
       if (occupiedRoomIds.size > 0) {
         filter._id = { $nin: Array.from(occupiedRoomIds).map(id => new mongoose.Types.ObjectId(id)) };
       }

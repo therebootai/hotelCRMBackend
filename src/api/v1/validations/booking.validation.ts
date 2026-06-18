@@ -87,13 +87,8 @@ export const createBookingSchema = z.object({
     selectedTaxId: z.string().optional(),
 
     status: z.enum([
-      "Pending",
-      "Confirmed",
-      "Checked-In",
-      "Checked-Out",
-      "Cancelled",
-      "No-Show",
-      "Hold"
+      "Tentative",
+      "Confirmed"
     ]).optional(),
 
     expiresAt: z.coerce.date().optional(),
@@ -129,13 +124,8 @@ export const updateBookingSchema = z.object({
   }),
   body: z.object({
     status: z.enum([
-      "Pending",
-      "Confirmed",
-      "Checked-In",
-      "Checked-Out",
-      "Cancelled",
-      "No-Show",
-      "Hold"
+      "Tentative",
+      "Confirmed"
     ]).optional(),
     bookingCategory: z.enum(["Room Stay", "Day Access", "Event", "Banquet"]).optional(),
     bookingType: z.enum(["Individual", "Corporate"]).optional(),
@@ -228,7 +218,7 @@ export const cancelBookingSchema = z.object({
     id: objectIdSchema,
   }),
   body: z.object({
-    reason: z.string().min(5, "Cancellation reason must be at least 5 characters"),
+    reason: z.string().min(3, "Cancellation reason must be at least 5 characters"),
     refundAmount: z.number().min(0).optional(),
   }),
 });

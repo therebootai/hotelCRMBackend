@@ -658,6 +658,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
       highFloor,
       nearLift,
       floor,
+      excludeBookingId,
     } = req.query;
 
     if (!checkIn || !checkOut) {
@@ -727,7 +728,8 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
           new mongoose.Types.ObjectId(rtId),
           checkInDate,
           checkOutDate,
-          0
+          0,
+          excludeBookingId ? new mongoose.Types.ObjectId(excludeBookingId as string) : undefined
         );
         typeAvailMap.set(rtId, ta.availableCount);
       })
@@ -740,7 +742,8 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
         const availability = await checkRoomAvailability(
           room._id,
           checkInDate,
-          checkOutDate
+          checkOutDate,
+          excludeBookingId ? new mongoose.Types.ObjectId(excludeBookingId as string) : undefined
         );
 
         // Also enforce type-level slot count (catches type-based bookings with no roomId)
@@ -854,7 +857,7 @@ export const createBooking = async (req: Request, res: Response) => {
       corporateDetails,
       bookingCategory = "Room Stay",
       mealPlan,
-      status: reqStatus,
+      status,
       expiresAt,
       externalBookingId,
       estimatedArrivalTime,
@@ -900,20 +903,7 @@ export const createBooking = async (req: Request, res: Response) => {
     let totals;
     let dayAccessPackage = null;
 
-    // Resolve selected tax from tax-gst master
-    let resolvedTaxPercent = 12;
-    let taxGstId: mongoose.Types.ObjectId | undefined;
-    if (selectedTaxId) {
-      try {
-        const taxGst = await TaxGst.findById(selectedTaxId).session(session);
-        if (taxGst && taxGst.isActive) {
-          resolvedTaxPercent = taxGst.percentage;
-          taxGstId = taxGst._id as mongoose.Types.ObjectId;
-        }
-      } catch (err) {
-        console.error("Error resolving selectedTaxId:", err);
-      }
-    }
+    // Global tax fallback removed - pricing completely relies on individual room/addon taxes
 
     if (bookingCategory === "Day Access") {
       const { accessPackageId, visitDate, adults = 1, children = 0 } = req.body;
@@ -943,7 +933,7 @@ export const createBooking = async (req: Request, res: Response) => {
         pkgPrice,
         Number(adults),
         Number(children),
-        resolvedTaxPercent,
+        12, // Default 12% for Day Access packages
         addons
       );
     } else if (rooms && rooms.length > 0) {
@@ -996,7 +986,7 @@ export const createBooking = async (req: Request, res: Response) => {
         });
       }
 
-      totals = await calculateBookingTotals(validatedRooms, bookingType, corporateDetails, bookingCategory, undefined, undefined, undefined, resolvedTaxPercent, addons);
+      totals = await calculateBookingTotals(validatedRooms, bookingType, corporateDetails, bookingCategory, undefined, undefined, undefined, 12, addons);
     } else if (roomTypesData?.length || roomTypeData) {
       // Normalize: old single-object format → array of 1
       const entries: any[] = roomTypesData?.length
@@ -1101,21 +1091,7 @@ export const createBooking = async (req: Request, res: Response) => {
       const overallNights =
         differenceInDays(overallCheckOut!, overallCheckIn!) || 1;
 
-      totals = {
-        roomTotal,
-        discountAmount: 0,
-        taxAmount: 0,
-        grandTotal: roomTotal,
-        paidAmount: 0,
-        dueAmount: roomTotal,
-        totalAdults: totalAdultsCount,
-        totalChildren: totalChildrenCount,
-        totalGuests: totalAdultsCount + totalChildrenCount,
-        totalRooms: totalRoomsCount,
-        totalNights: overallNights,
-        overallCheckInDate: overallCheckIn!,
-        overallCheckOutDate: overallCheckOut!,
-      };
+      totals = await calculateBookingTotals(validatedRooms, bookingType, corporateDetails, bookingCategory, undefined, undefined, undefined, 12, addons);
     } else {
       await session.abortTransaction();
       return res.status(400).json({
@@ -1124,32 +1100,6 @@ export const createBooking = async (req: Request, res: Response) => {
       });
     }
 
-    let status: "Pending" | "Confirmed" | "Checked-In" | "Checked-Out" | "Cancelled" | "No-Show" | "Hold" = "Pending";
-    if (advanceAmount > 0) {
-      status = "Confirmed";
-    } else if (reqStatus) {
-      status = reqStatus as any;
-    } else {
-      if (bookingType === "Corporate") {
-        status = "Confirmed";
-      }
-    }
-
-    // Tax resolution moved to start of function
-
-    // Recalculate totals with the resolved tax percentage and addons
-    let addonTotal = 0;
-    let addonTax = 0;
-    if (addons && addons.length > 0) {
-      addons.forEach((a: any) => {
-        addonTotal += Number(a.total) || 0;
-        addonTax += ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100;
-      });
-    }
-
-    const roomTaxAmount = (totals.roomTotal * resolvedTaxPercent) / 100;
-    totals.taxAmount = roomTaxAmount + addonTax;
-    totals.grandTotal = totals.roomTotal + addonTotal + totals.taxAmount - totals.discountAmount;
     totals.dueAmount = Math.max(0, totals.grandTotal - advanceAmount);
     const bookingId = `BK-${Date.now().toString().slice(-6)}`;
 
@@ -1177,7 +1127,7 @@ export const createBooking = async (req: Request, res: Response) => {
           },
           corporateDetails: bookingType === "Corporate" ? corporateDetails : undefined,
           mealPlan,
-          status: status ?? (advanceAmount > 0 ? "Confirmed" : "Pending"),
+          status,
           source,
           externalBookingId,
           paymentStatus: advanceAmount > 0 ? "Partial" : "Pending",
@@ -1188,12 +1138,11 @@ export const createBooking = async (req: Request, res: Response) => {
             roomTotal: totals.roomTotal,
             discountAmount: totals.discountAmount,
             taxAmount: totals.taxAmount,
-            taxPercentage: resolvedTaxPercent,
+            taxPercentage: 0,
             grandTotal: totals.grandTotal,
             paidAmount: advanceAmount,
             dueAmount: totals.grandTotal - advanceAmount,
           },
-          taxGstId,
           estimatedArrivalTime,
           pickupRequired: pickupRequired || false,
           vehicleDetails: vehicleDetails || [],
@@ -1235,7 +1184,7 @@ export const createBooking = async (req: Request, res: Response) => {
         bookingCategory === "Day Access" ? dayAccessPackage?.packageType : undefined,
         bookingCategory === "Day Access" ? dayAccessPackage?.adult_price : undefined,
         bookingCategory === "Day Access" ? (totals.totalAdults + totals.totalChildren) : undefined,
-        resolvedTaxPercent,
+        12, // fallback for billing if Day Access
         addons || [],
         paymentRemarks,
         { session }
@@ -1444,6 +1393,13 @@ export const updateBooking = async (req: Request, res: Response) => {
       });
     }
 
+    if (!["Tentative", "Confirmed"].includes(existingBooking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot edit booking in '${existingBooking.status}' status. Only Tentative and Confirmed bookings can be edited.`,
+      });
+    }
+
     let updatedRooms: IBookedRoom[] | undefined = undefined;
     let totals: any = null;
 
@@ -1460,7 +1416,9 @@ export const updateBooking = async (req: Request, res: Response) => {
         "Day Access",
         pkgPrice,
         existingBooking.totalAdults,
-        existingBooking.totalChildren
+        existingBooking.totalChildren,
+        12, // Default 12% for Day Access packages
+        addons || existingBooking.addons || []
       );
     } else {
       if (rooms && rooms.length > 0) {
@@ -1503,7 +1461,14 @@ export const updateBooking = async (req: Request, res: Response) => {
           });
         }
         updatedRooms = validatedRooms;
-        totals = await calculateBookingTotals(validatedRooms, existingBooking.bookingType, corporateDetails || existingBooking.corporateDetails);
+        totals = await calculateBookingTotals(
+          validatedRooms, 
+          existingBooking.bookingType, 
+          corporateDetails || existingBooking.corporateDetails, 
+          existingBooking.bookingCategory, 
+          undefined, undefined, undefined, 12, 
+          addons || existingBooking.addons || []
+        );
       } else if (roomTypesData && roomTypesData.length > 0) {
         // General room types without specific assignment
         const validatedRooms: IBookedRoom[] = [];
@@ -1588,21 +1553,14 @@ export const updateBooking = async (req: Request, res: Response) => {
         const overallNights = differenceInDays(overallCheckOut!, overallCheckIn!) || 1;
 
         updatedRooms = validatedRooms;
-        totals = {
-          roomTotal,
-          discountAmount: 0,
-          taxAmount: 0,
-          grandTotal: roomTotal,
-          paidAmount: 0,
-          dueAmount: roomTotal,
-          totalAdults: totalAdultsCount,
-          totalChildren: totalChildrenCount,
-          totalGuests: totalAdultsCount + totalChildrenCount,
-          totalRooms: totalRoomsCount,
-          totalNights: overallNights,
-          overallCheckInDate: overallCheckIn!,
-          overallCheckOutDate: overallCheckOut!,
-        };
+        totals = await calculateBookingTotals(
+          validatedRooms, 
+          existingBooking.bookingType, 
+          corporateDetails || existingBooking.corporateDetails, 
+          existingBooking.bookingCategory, 
+          undefined, undefined, undefined, 12, 
+          addons || existingBooking.addons || []
+        );
       }
     }
 
@@ -1624,7 +1582,7 @@ export const updateBooking = async (req: Request, res: Response) => {
 
     if (targetStatus && targetStatus !== existingBooking.status) {
       await transitionBookingState(
-        existingBooking._id,
+        existingBooking,
         targetStatus as any,
         {
           userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
@@ -1676,18 +1634,7 @@ export const updateBooking = async (req: Request, res: Response) => {
       };
     }
   
-    let resolvedTaxPercent = existingBooking.pricingSummary.taxPercentage || 12;
-    if (selectedTaxId) {
-      try {
-        const taxGst = await TaxGst.findById(selectedTaxId).session(session);
-        if (taxGst && taxGst.isActive) {
-          resolvedTaxPercent = taxGst.percentage;
-          existingBooking.taxGstId = taxGst._id as mongoose.Types.ObjectId;
-        }
-      } catch (err) {
-        console.error("Error resolving selectedTaxId in updateBooking:", err);
-      }
-    }
+    // Global tax fallback removed
 
     if (totals || selectedTaxId || addons) {
       const roomTotal = totals ? totals.roomTotal : existingBooking.pricingSummary.roomTotal;
@@ -1716,7 +1663,7 @@ export const updateBooking = async (req: Request, res: Response) => {
         ...existingBooking.pricingSummary,
         roomTotal,
         taxAmount,
-        taxPercentage: resolvedTaxPercent,
+        taxPercentage: 0,
         grandTotal,
         dueAmount: grandTotal - (existingBooking.pricingSummary.paidAmount || 0),
       };
@@ -1752,9 +1699,10 @@ export const updateBooking = async (req: Request, res: Response) => {
         undefined,
         undefined,
         undefined,
-        existingBooking.pricingSummary?.taxPercentage || 12,
+        existingBooking.pricingSummary?.taxPercentage || 0,
         existingBooking.addons || [],
-        paymentRemarks
+        paymentRemarks,
+        { session }
       );
     } else if (totals || selectedTaxId || addons) {
       // Recalculate paymentStatus based on updated totals even if no new advance payment
@@ -1821,7 +1769,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
     }
 
     const cancelledBooking = await transitionBookingState(
-      booking._id,
+      booking,
       "Cancelled",
       {
         userId: (req as any).user?._id || new mongoose.Types.ObjectId(),
@@ -2259,5 +2207,39 @@ export const emailReceipt = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("emailReceipt error:", error);
     res.status(500).json({ success: false, message: error.message || "Failed to send receipt" });
+  }
+};
+
+export const whatsappReceipt = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ success: false, message: "Phone number is required" });
+    }
+
+    const booking = await Booking.findById(id).populate("customerId");
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const name = booking.bookingContact?.name || (booking.customerId as any)?.name || "Guest";
+    const checkInDate = booking.overallCheckInDate || new Date();
+    const checkOutDate = booking.overallCheckOutDate || new Date();
+    
+    await waBridgeService.sendBookingConfirmation(
+      phone,
+      name,
+      booking.bookingId,
+      checkInDate,
+      checkOutDate
+    );
+
+    res.status(200).json({ success: true, message: "WhatsApp message sent successfully" });
+  } catch (error: any) {
+    console.error("whatsappReceipt error:", error);
+    res.status(500).json({ success: false, message: error.message || "Failed to send WhatsApp message" });
   }
 };

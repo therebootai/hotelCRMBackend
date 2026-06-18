@@ -10,6 +10,7 @@ import {
   getBookingOverview,
   getBookingCalendar,
   emailReceipt,
+  whatsappReceipt,
 } from "../controllers/booking.controller";
 import { validateRequest } from "@/api/v1/middlewares/validateRequest.middleware";
 import { protect } from "@/api/v1/middlewares/auth.middleware";
@@ -39,5 +40,6 @@ router.post("/create", validateRequest(createBookingSchema), requirePermission("
 router.put("/:id", validateRequest(updateBookingSchema), requirePermission("MANAGE_BOOKINGS"), updateBooking);
 router.patch("/:id/cancel", validateRequest(cancelBookingSchema), requirePermission("MANAGE_BOOKINGS"), cancelBooking);
 router.post("/:id/email-receipt", requirePermission("MANAGE_BOOKINGS"), emailReceipt);
+router.post("/:id/whatsapp-receipt", requirePermission("MANAGE_BOOKINGS"), whatsappReceipt);
 
 export default router;
