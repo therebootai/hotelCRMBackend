@@ -218,7 +218,7 @@ export const cancelBookingSchema = z.object({
     id: objectIdSchema,
   }),
   body: z.object({
-    reason: z.string().min(5, "Cancellation reason must be at least 5 characters"),
+    reason: z.string().min(3, "Cancellation reason must be at least 5 characters"),
     refundAmount: z.number().min(0).optional(),
   }),
 });
