@@ -383,7 +383,7 @@ export const getBillPreview = async (req: Request, res: Response) => {
 
         // keep old payments & manual edits
         payments: billing.payments,
-        paidAmount: computedPaidAmount,
+        paidAmount: 0, // Reset to 0 so we purely rely on advanceDeducted from CheckIn
         taxAmount: (checkInData as any).paymentSummary?.taxAmount || 0,
         dueAmount: computedDueAmount,
         discount: billing.discount,
