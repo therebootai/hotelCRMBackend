@@ -27,7 +27,7 @@ export const processCheckout = async (req: Request, res: Response) => {
       restaurantCharges,
       facilityCharges,
       discount,
-      taxPercentage,
+      taxAmount: frontendTaxAmount,
       notes,
       isCheckout,
       payment,
@@ -72,13 +72,13 @@ export const processCheckout = async (req: Request, res: Response) => {
     const servicesTotal = (extraServices || []).reduce((acc: number, s: any) => acc + (Number(s.total) || 0), 0);
     const facilitiesTotal = (facilityCharges || []).reduce((acc: number, f: any) => acc + (Number(f.totalFacilityCharge) || 0), 0);
     const subTotal = totalRoomCharges + servicesTotal + facilitiesTotal + Number(restaurantCharges || 0);
-    const taxAmt = parseFloat(((subTotal * Number(taxPercentage || 0)) / 100).toFixed(2));
+    const taxAmt = Number(frontendTaxAmount) || checkInData.paymentSummary?.taxAmount || 0;
     
     // Extract standalone damage amount so it doesn't incur tax
     const damageCharges = Number(checkoutVerification?.damageAmount) || 0;
     
     const grandTotal = parseFloat((subTotal + taxAmt + damageCharges - Number(discount || 0)).toFixed(2));
-    const advanceDeducted = checkInData.totalAdvanceAmount || checkInData.paymentSummary?.totalPaid || 0;
+    const advanceDeducted = checkInData.paymentSummary?.totalPaid || checkInData.totalAdvanceAmount || 0;
     const netPayable = parseFloat(Math.max(0, grandTotal - advanceDeducted).toFixed(2));
 
     let bill = await Billing.findOne({
@@ -384,8 +384,12 @@ export const getBillPreview = async (req: Request, res: Response) => {
         // keep old payments & manual edits
         payments: billing.payments,
         paidAmount: computedPaidAmount,
+        taxAmount: (checkInData as any).paymentSummary?.taxAmount || 0,
         dueAmount: computedDueAmount,
         discount: billing.discount,
+        advanceDeducted: (checkInData as any).paymentSummary?.totalPaid || billing.advanceDeducted || 0,
+        taxPercentage: 0,
+        advancePaymentsHistory: (checkInData as any).payments || (checkInData as any).advancePayments || [],
         notes: billing.notes,
 
         isUpdated: true,
@@ -408,15 +412,16 @@ export const getBillPreview = async (req: Request, res: Response) => {
 
     const previewData = {
       roomChargesBreakdown: recalculatedRooms,
-      advanceDeducted: (checkInData as any).totalAdvanceAmount,
-      advancePaymentsHistory: (checkInData as any).advancePayments,
+      advanceDeducted: (checkInData as any).paymentSummary?.totalPaid || (checkInData as any).totalAdvanceAmount || 0,
+      advancePaymentsHistory: (checkInData as any).payments || (checkInData as any).advancePayments || [],
       extraServices: [],
       discount: 0,
       notes: "",
       payments: [],
       paidAmount: 0,
       primaryGuest: primaryGuest ? { name: primaryGuest.name, mobileNo: primaryGuest.mobileNo } : null,
-      taxPercentage: storedTaxPercent,
+      taxPercentage: 0,
+      taxAmount: (checkInData as any).paymentSummary?.taxAmount || 0,
       taxGstId: storedTaxGstId,
       checkoutVerification: checkInData.checkoutVerification || null
     };
