@@ -854,7 +854,7 @@ export const createBooking = async (req: Request, res: Response) => {
       corporateDetails,
       bookingCategory = "Room Stay",
       mealPlan,
-      status: reqStatus,
+      status,
       expiresAt,
       externalBookingId,
       estimatedArrivalTime,
@@ -1124,16 +1124,16 @@ export const createBooking = async (req: Request, res: Response) => {
       });
     }
 
-    let status: "Pending" | "Confirmed" | "Checked-In" | "Checked-Out" | "Cancelled" | "No-Show" | "Hold" = "Pending";
-    if (advanceAmount > 0) {
-      status = "Confirmed";
-    } else if (reqStatus) {
-      status = reqStatus as any;
-    } else {
-      if (bookingType === "Corporate") {
-        status = "Confirmed";
-      }
-    }
+    // let status: "Pending" | "Confirmed" | "Checked-In" | "Checked-Out" | "Cancelled" | "No-Show" | "Hold" = "Pending";
+    // if (advanceAmount > 0) {
+    //   status = "Confirmed";
+    // } else if (reqStatus) {
+    //   status = reqStatus as any;
+    // } else {
+    //   if (bookingType === "Corporate") {
+    //     status = "Confirmed";
+    //   }
+    // }
 
     // Tax resolution moved to start of function
 
@@ -1177,7 +1177,7 @@ export const createBooking = async (req: Request, res: Response) => {
           },
           corporateDetails: bookingType === "Corporate" ? corporateDetails : undefined,
           mealPlan,
-          status: status ?? (advanceAmount > 0 ? "Confirmed" : "Pending"),
+          status,
           source,
           externalBookingId,
           paymentStatus: advanceAmount > 0 ? "Partial" : "Pending",

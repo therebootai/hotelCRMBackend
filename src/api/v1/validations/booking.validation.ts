@@ -87,13 +87,8 @@ export const createBookingSchema = z.object({
     selectedTaxId: z.string().optional(),
 
     status: z.enum([
-      "Pending",
-      "Confirmed",
-      "Checked-In",
-      "Checked-Out",
-      "Cancelled",
-      "No-Show",
-      "Hold"
+      "Tentative",
+      "Confirmed"
     ]).optional(),
 
     expiresAt: z.coerce.date().optional(),
