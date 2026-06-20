@@ -316,8 +316,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || sel.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
-          appliedPrice: sel.appliedPrice || sel.pricePerNight || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          originalPrice: sel.originalPrice || sel.pricePerNight || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          appliedPrice: sel.appliedPrice || sel.pricePerNight || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -335,8 +335,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
-          appliedPrice: sel.appliedPrice || sel.originalPrice || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          originalPrice: sel.originalPrice || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          appliedPrice: sel.appliedPrice || sel.originalPrice || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -1103,8 +1103,8 @@ export const extendStay = async (req: Request, res: Response) => {
           roomId: roomObjectId,
           roomType: roomInfo?.roomType as any,
           roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string,
-          originalPrice: (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
-          appliedPrice: Number(appliedPrice) || (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          originalPrice: ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          appliedPrice: Number(appliedPrice) || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
           assignedAt: new Date(),
         });
       }
@@ -1635,7 +1635,7 @@ export const roomChange = async (req: Request, res: Response) => {
       differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart))
     );
 
-    const newRoomBasePrice = (newRoom.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0;
+    const newRoomBasePrice = ((newRoom.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (newRoom.discountPercentage || 0) / 100);
 
     checkIn.roomDetails = [
       {

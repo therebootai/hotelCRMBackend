@@ -229,6 +229,7 @@ export const calculateDateWisePricing = async (
   checkInDate: Date,
   checkOutDate: Date,
   basePrice: number,
+  discountPercentage: number = 0,
   negotiatedRate?: number
 ): Promise<{ nightlyBreakdown: IPricingBreakdown[]; totalPrice: number; totalNights: number }> => {
   const dates = eachDayOfInterval({ start: checkInDate, end: new Date(checkOutDate.getTime() - 86400000) }); // Exclude checkout date
@@ -246,7 +247,8 @@ export const calculateDateWisePricing = async (
   });
 
   let totalPrice = 0;
-  const effectiveRate = negotiatedRate || basePrice;
+  const discountedBasePrice = basePrice - (basePrice * (discountPercentage || 0) / 100);
+  const effectiveRate = negotiatedRate || discountedBasePrice;
 
   for (const date of dates) {
     const dateKey = startOfDay(date).toISOString();
@@ -337,7 +339,8 @@ export const createOrUpdateBilling = async (
             room.roomId!,
             checkIn,
             checkOut,
-            (roomInfo?.roomType as any)?.basePrice || 0
+            (roomInfo?.roomType as any)?.basePrice || 0,
+            roomInfo?.discountPercentage || 0
           );
           totalPrice = pricing.totalPrice;
           finalRate = pricing.nightlyBreakdown[0]?.finalPrice || finalRate;
@@ -584,6 +587,7 @@ export const calculateBookingTotals = async (
         checkIn,
         checkOut,
         (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+        roomInfo?.discountPercentage || 0,
         bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
       );
 
@@ -761,7 +765,8 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
           room._id,
           checkInDate,
           checkOutDate,
-          roomTypeBasePrice
+          roomTypeBasePrice,
+          room.discountPercentage || 0
         );
 
         // Apply price range filter
@@ -780,6 +785,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
             maxAdults: room.maxAdults,
             maxChildren: room.maxChildren,
             basePrice: roomTypeBasePrice,
+            discountPercentage: room.discountPercentage || 0,
           },
           roomType: room.roomType,
           amenities: room.amenities,
@@ -968,6 +974,7 @@ export const createBooking = async (req: Request, res: Response) => {
           new Date(room.checkInDate),
           new Date(room.checkOutDate),
           (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+          roomInfo?.discountPercentage || 0,
           bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
         );
 
@@ -1446,6 +1453,7 @@ export const updateBooking = async (req: Request, res: Response) => {
             new Date(room.checkInDate),
             new Date(room.checkOutDate),
             (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
+            roomInfo?.discountPercentage || 0,
             existingBooking.bookingType === "Corporate" ? corporateDetails?.negotiatedRate || existingBooking.corporateDetails?.negotiatedRate : undefined
           );
 
