@@ -60,6 +60,15 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
+    const guestAdditionalDocFiles: UploadedFile[] = [];
+    if (files.guestAdditionalDocs) {
+      if (Array.isArray(files.guestAdditionalDocs)) {
+        guestAdditionalDocFiles.push(...files.guestAdditionalDocs);
+      } else {
+        guestAdditionalDocFiles.push(files.guestAdditionalDocs);
+      }
+    }
+
     let signedGRCFile: UploadedFile | null = null;
     if (files.signedGRC) {
       signedGRCFile = Array.isArray(files.signedGRC) ? files.signedGRC[0] : files.signedGRC;
@@ -84,6 +93,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       guestDocIndices = typeof rawIndices === "string"
         ? JSON.parse(rawIndices)
         : rawIndices;
+    }
+
+    let guestAdditionalDocIndices: { guestIdx: number; docIdx: number }[] = [];
+    const rawAdditionalIndices = req.body.guestAdditionalDocIndices;
+    if (rawAdditionalIndices) {
+      guestAdditionalDocIndices = typeof rawAdditionalIndices === "string"
+        ? JSON.parse(rawAdditionalIndices)
+        : rawAdditionalIndices;
     }
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
 
@@ -119,6 +136,23 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       } catch (uploadErr) {
         console.error("Guest doc upload failed:", uploadErr);
         guestDocMap[guestId] = { public_id: "", secure_url: "" };
+      }
+    }
+
+    for (let i = 0; i < guestAdditionalDocFiles.length; i++) {
+      const file = guestAdditionalDocFiles[i];
+      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? { guestIdx: -1, docIdx: -1 };
+      
+      if (guestIdx >= 0 && docIdx >= 0 && parsedGuests[guestIdx]?.additionalIds?.[docIdx]) {
+        try {
+          const result = await uploadFile(file.tempFilePath, "guest-additional-documents", file.mimetype);
+          parsedGuests[guestIdx].additionalIds[docIdx].idDocument = {
+            public_id: result.public_id,
+            secure_url: result.secure_url,
+          };
+        } catch (uploadErr) {
+          console.error("Guest additional doc upload failed:", uploadErr);
+        }
       }
     }
 
@@ -235,6 +269,11 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           ? new mongoose.Types.ObjectId(g.assignedRoomId)
           : undefined,
         idDocument: finalDoc,
+        idDocuments: g.additionalIds?.map((add: any) => ({
+             idType: add.idType || "",
+             idNumber: add.idNumber || "",
+             idDocument: add.idDocument || { public_id: "", secure_url: "" }
+         })) || []
       };
     });
 
@@ -1266,6 +1305,15 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       }
     }
 
+    const guestAdditionalDocFiles: UploadedFile[] = [];
+    if (files.guestAdditionalDocs) {
+      if (Array.isArray(files.guestAdditionalDocs)) {
+        guestAdditionalDocFiles.push(...files.guestAdditionalDocs);
+      } else {
+        guestAdditionalDocFiles.push(files.guestAdditionalDocs);
+      }
+    }
+
     const guestDocMap: Record<string, { public_id: string; secure_url: string }> = {};
 
     let guestDocIndices: number[] = [];
@@ -1274,6 +1322,14 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       guestDocIndices = typeof rawIndices === "string"
         ? JSON.parse(rawIndices)
         : rawIndices;
+    }
+
+    let guestAdditionalDocIndices: { guestIdx: number; docIdx: number }[] = [];
+    const rawAdditionalIndices = req.body.guestAdditionalDocIndices;
+    if (rawAdditionalIndices) {
+      guestAdditionalDocIndices = typeof rawAdditionalIndices === "string"
+        ? JSON.parse(rawAdditionalIndices)
+        : rawAdditionalIndices;
     }
 
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
@@ -1292,6 +1348,23 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       } catch (uploadErr) {
         console.error("Guest doc upload failed:", uploadErr);
         guestDocMap[guestId] = { public_id: "", secure_url: "" };
+      }
+    }
+
+    for (let i = 0; i < guestAdditionalDocFiles.length; i++) {
+      const file = guestAdditionalDocFiles[i];
+      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? { guestIdx: -1, docIdx: -1 };
+      
+      if (guestIdx >= 0 && docIdx >= 0 && parsedGuests[guestIdx]?.additionalIds?.[docIdx]) {
+        try {
+          const result = await uploadFile(file.tempFilePath, "guest-additional-documents", file.mimetype);
+          parsedGuests[guestIdx].additionalIds[docIdx].idDocument = {
+            public_id: result.public_id,
+            secure_url: result.secure_url,
+          };
+        } catch (uploadErr) {
+          console.error("Guest additional doc upload failed:", uploadErr);
+        }
       }
     }
 
@@ -1329,6 +1402,11 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
             ? new mongoose.Types.ObjectId(g.assignedRoomId)
             : existingGuest?.assignedRoomId,
           idDocument: finalIdDocument,
+          idDocuments: g.additionalIds?.map((add: any) => ({
+             idType: add.idType || "",
+             idNumber: add.idNumber || "",
+             idDocument: add.idDocument || { public_id: "", secure_url: "" }
+         })) || existingGuest?.idDocuments || [],
           relationship: g.relationship || existingGuest?.relationship || "",
           dateOfBirth: g.dateOfBirth ? new Date(g.dateOfBirth) : existingGuest?.dateOfBirth,
           livePhoto: existingGuest?.livePhoto,

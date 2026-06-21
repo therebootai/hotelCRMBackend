@@ -80,6 +80,14 @@ export interface IGuestDetail {
     public_id: string;
     secure_url: string;
   };
+  idDocuments?: {
+    idType: string;
+    idNumber: string;
+    idDocument: {
+      public_id: string;
+      secure_url: string;
+    };
+  }[];
   assignedRoomId?: mongoose.Types.ObjectId;
 
   // Extended Guest Fields
@@ -330,6 +338,16 @@ const CheckInSchema = new Schema<ICheckIn>(
           public_id: { type: String },
           secure_url: { type: String },
         },
+        idDocuments: [
+          {
+            idType: { type: String },
+            idNumber: { type: String },
+            idDocument: {
+              public_id: { type: String },
+              secure_url: { type: String },
+            },
+          },
+        ],
         assignedRoomId: { type: Schema.Types.ObjectId, ref: "Room" },
         relationship: { type: String },
         age: { type: Number },
