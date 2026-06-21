@@ -217,8 +217,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       selections = booking?.rooms.map((r: any) => ({
         roomId: r.roomId,
         roomType: r.roomType,
-        originalPrice: r.pricePerNight || 0,
-        appliedPrice: r.pricePerNight || 0,
+        originalPrice: Math.round(r.pricePerNight || 0),
+        appliedPrice: Math.round(r.pricePerNight || 0),
         hasExtraBed: r.hasExtraBed || false,
         extraBedCharge: r.extraBedCharge || 0,
       }));
@@ -352,7 +352,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         const taxPercentage = rt?.gstId?.percentage || 0;
         const basePrice = rt?.basePrice || 0;
         const discountPercentage = rt?.discountPercentage || 0;
-        const discountedPrice = basePrice * (1 - discountPercentage / 100);
+        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
@@ -375,14 +375,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
         const basePrice = rt?.basePrice || 0;
         const discountPercentage = rt?.discountPercentage || 0;
-        const discountedPrice = basePrice * (1 - discountPercentage / 100);
+        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || discountedPrice,
-          appliedPrice: sel.appliedPrice || sel.originalPrice || discountedPrice,
+          originalPrice: Math.round(sel.originalPrice || discountedPrice),
+          appliedPrice: Math.round(sel.appliedPrice || sel.originalPrice || discountedPrice),
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -399,23 +399,23 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       let actualTaxAmount = 0;
 
       roomDetails.forEach((r: any) => {
-        const roomBaseTotal = (r.appliedPrice || 0) * nights;
+        const roomBaseTotal = Math.round((r.appliedPrice || 0) * nights);
         actualRoomTotal += roomBaseTotal;
         const taxPct = r._taxPercentage || 0;
-        actualTaxAmount += roomBaseTotal * (taxPct / 100);
+        actualTaxAmount += Math.round(roomBaseTotal * (taxPct / 100));
       });
 
       const combinedAddons = booking ? (booking.addons || []) : (extraServices || []);
 
-      const addonTotal = combinedAddons.reduce(
+      const addonTotal = Math.round(combinedAddons.reduce(
         (s: number, a: any) => s + (Number(a.total) || 0),
         0,
-      );
+      ));
       
-      const addonTaxTotal = combinedAddons.reduce(
+      const addonTaxTotal = Math.round(combinedAddons.reduce(
         (s: number, a: any) => s + ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0) / 100),
         0,
-      );
+      ));
       
       actualTaxAmount = Math.round(actualTaxAmount + addonTaxTotal);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
@@ -1148,14 +1148,14 @@ export const extendStay = async (req: Request, res: Response) => {
         const rt = roomInfo?.roomType as any;
         const basePrice = rt?.basePrice || 0;
         const discountPercentage = rt?.discountPercentage || 0;
-        const discountedPrice = basePrice * (1 - discountPercentage / 100);
+        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
 
         checkIn.roomDetails.push({
           roomId: roomObjectId,
           roomType: roomInfo?.roomType as any,
           roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string,
           originalPrice: discountedPrice,
-          appliedPrice: Number(appliedPrice) || discountedPrice,
+          appliedPrice: Math.round(Number(appliedPrice) || discountedPrice),
           assignedAt: new Date(),
         });
       }
@@ -1449,8 +1449,8 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
         roomId: new mongoose.Types.ObjectId(r.roomId),
         roomType: r.roomType ? new mongoose.Types.ObjectId(r.roomType) : undefined,
         roomNumber: r.roomNumber || "",
-        originalPrice: r.originalPrice || 0,
-        appliedPrice: r.appliedPrice || r.originalPrice || 0,
+        originalPrice: Math.round(r.originalPrice || 0),
+        appliedPrice: Math.round(r.appliedPrice || r.originalPrice || 0),
         assignedAt: new Date(),
       }));
     }
