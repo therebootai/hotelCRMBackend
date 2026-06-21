@@ -20,6 +20,7 @@ import { waBridgeService } from "../services/wabridge.service";
 import puppeteer from "puppeteer";
 import { emailService } from "../services/email.service";
 import { buildReceiptHtml } from "../../../utils/receiptHtmlBuilder";
+import { PricingService } from "../services/pricing.service";
 
 interface IRoomAvailabilitySearch {
   checkInDate: Date;
@@ -224,54 +225,7 @@ export const getRoomTypeAvailableCount = async (req: Request, res: Response) => 
   }
 };
 
-export const calculateDateWisePricing = async (
-  roomId: mongoose.Types.ObjectId,
-  checkInDate: Date,
-  checkOutDate: Date,
-  basePrice: number,
-  discountPercentage: number = 0,
-  negotiatedRate?: number
-): Promise<{ nightlyBreakdown: IPricingBreakdown[]; totalPrice: number; totalNights: number }> => {
-  const dates = eachDayOfInterval({ start: checkInDate, end: new Date(checkOutDate.getTime() - 86400000) }); // Exclude checkout date
-  const nightlyBreakdown: IPricingBreakdown[] = [];
-
-  const pricingRules = await PricingRule.find({
-    roomId,
-    date: { $gte: startOfDay(checkInDate), $lt: checkOutDate },
-  });
-
-  const ruleMap = new Map<string, number>();
-  pricingRules.forEach((rule) => {
-    const dateKey = startOfDay(new Date(rule.date)).toISOString();
-    ruleMap.set(dateKey, rule.price);
-  });
-
-  let totalPrice = 0;
-  const discountedBasePrice = basePrice - (basePrice * (discountPercentage || 0) / 100);
-  const effectiveRate = negotiatedRate || discountedBasePrice;
-
-  for (const date of dates) {
-    const dateKey = startOfDay(date).toISOString();
-    const rulePrice = ruleMap.get(dateKey);
-    const finalPrice = rulePrice ?? effectiveRate;
-
-    nightlyBreakdown.push({
-      date,
-      basePrice: effectiveRate,
-      rulePrice,
-      finalPrice,
-      isOverridden: rulePrice !== undefined,
-    });
-
-    totalPrice += finalPrice;
-  }
-
-  return {
-    nightlyBreakdown,
-    totalPrice,
-    totalNights: dates.length,
-  };
-};
+// calculateDateWisePricing moved to PricingService
 
 
 export const createOrUpdateBilling = async (
@@ -331,16 +285,16 @@ export const createOrUpdateBilling = async (
         nights = differenceInCalendarDays(checkOut, checkIn) || 1;
 
         if (room.roomId) {
-          const roomInfo = await Room.findById(room.roomId).populate("roomType", "name basePrice");
+          const roomInfo = await Room.findById(room.roomId).populate("roomType", "name basePrice discountPercentage");
           roomName = roomInfo?.roomNumber || "";
           roomTypeName = (roomInfo?.roomType as any)?.name || "";
           
-          const pricing = await calculateDateWisePricing(
+          const pricing = await PricingService.calculateDateWisePricing(
             room.roomId!,
             checkIn,
             checkOut,
             (roomInfo?.roomType as any)?.basePrice || 0,
-            roomInfo?.discountPercentage || 0
+            (roomInfo?.roomType as any)?.discountPercentage || 0
           );
           totalPrice = pricing.totalPrice;
           finalRate = pricing.nightlyBreakdown[0]?.finalPrice || finalRate;
@@ -499,151 +453,7 @@ export const createOrUpdateBilling = async (
 };
 
 
-export const calculateBookingTotals = async (
-  rooms: IBookedRoom[],
-  bookingType: string,
-  corporateDetails?: any,
-  bookingCategory?: string,
-  dayAccessPackagePrice?: number,
-  adultsCount: number = 1,
-  childrenCount: number = 0,
-  taxPercentage: number = 12,
-  addons: any[] = []
-): Promise<{
-  roomTotal: number;
-  discountAmount: number;
-  taxAmount: number;
-  grandTotal: number;
-  paidAmount: number;
-  dueAmount: number;
-  totalAdults: number;
-  totalChildren: number;
-  totalGuests: number;
-  totalRooms: number;
-  totalNights: number;
-  overallCheckInDate: Date;
-  overallCheckOutDate: Date;
-}> => {
-  if (bookingCategory === "Day Access") {
-    const packageTotal = (dayAccessPackagePrice || 0) * (adultsCount + childrenCount);
-    const discountAmount = 0;
-    
-    let addonTotal = 0;
-    let addonTax = 0;
-    addons.forEach((a: any) => {
-      addonTotal += Number(a.total) || 0;
-      addonTax += ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100;
-    });
-
-    const roomTaxAmount = (packageTotal * taxPercentage) / 100;
-    const taxAmount = roomTaxAmount + addonTax;
-    const grandTotal = packageTotal + addonTotal + taxAmount - discountAmount;
-
-    return {
-      roomTotal: packageTotal,
-      discountAmount,
-      taxAmount,
-      grandTotal,
-      paidAmount: 0,
-      dueAmount: grandTotal,
-      totalAdults: adultsCount,
-      totalChildren: childrenCount,
-      totalGuests: adultsCount + childrenCount,
-      totalRooms: 0,
-      totalNights: 1,
-      overallCheckInDate: new Date(),
-      overallCheckOutDate: new Date(),
-    };
-  }
-
-  let roomTotal = 0;
-  let totalAdults = 0;
-  let totalChildren = 0;
-  let totalRooms = rooms.length;
-  let overallCheckInDate = new Date();
-  let overallCheckOutDate = new Date();
-
-  const nightlyDetails = await Promise.all(
-    rooms.map(async (room, index) => {
-      const roomInfo = await Room.findById(room.roomId).populate({
-        path: "roomType",
-        select: "basePrice gstId",
-        populate: { path: "gstId", select: "percentage" }
-      });
-      const checkIn = new Date(room.checkInDate);
-      const checkOut = new Date(room.checkOutDate);
-      const nights = differenceInCalendarDays(checkOut, checkIn) || 1;
-
-      // Track overall dates
-      if (index === 0 || checkIn < overallCheckInDate) {
-        overallCheckInDate = checkIn;
-      }
-      if (index === 0 || checkOut > overallCheckOutDate) {
-        overallCheckOutDate = checkOut;
-      }
-
-      const pricing = await calculateDateWisePricing(
-        room.roomId!,
-        checkIn,
-        checkOut,
-        (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
-        roomInfo?.discountPercentage || 0,
-        bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
-      );
-
-      const extraBedCharge = room.hasExtraBed ? (room.extraBedCharge || (roomInfo as any)?.extraBedCharge || 0) * pricing.totalNights : 0;
-      const totalRoomCharge = pricing.totalPrice + extraBedCharge;
-
-      let roomSpecificTaxPercentage = 0;
-      if (roomInfo && roomInfo.roomType && (roomInfo.roomType as any).gstId) {
-        roomSpecificTaxPercentage = (roomInfo.roomType as any).gstId.percentage || 0;
-      }
-      const taxForThisRoom = (totalRoomCharge * roomSpecificTaxPercentage) / 100;
-
-      totalAdults += room.adults || 1;
-      totalChildren += room.children || 0;
-
-      return {
-        nights,
-        totalPrice: totalRoomCharge,
-        taxAmount: taxForThisRoom,
-      };
-    })
-  );
-
-  roomTotal = nightlyDetails.reduce((sum, d) => sum + d.totalPrice, 0);
-  const totalNights = nightlyDetails[0]?.nights || 1;
-
-  let addonTotal = 0;
-  let addonTax = 0;
-  addons.forEach((a: any) => {
-    addonTotal += Number(a.total) || 0;
-    addonTax += ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100;
-  });
-
-  const discountAmount = 0;
-  const roomTaxAmount = nightlyDetails.reduce((sum, d) => sum + d.taxAmount, 0);
-  const taxAmount = roomTaxAmount + addonTax;
-  const grandTotal = roomTotal + addonTotal + taxAmount - discountAmount;
-  const paidAmount = 0;
-  const dueAmount = grandTotal;
-
-  return {
-    roomTotal,
-    discountAmount,
-    taxAmount,
-    grandTotal,
-    paidAmount,
-    dueAmount,
-    totalAdults,
-    totalChildren,
-    totalGuests: totalAdults + totalChildren,
-    totalRooms,
-    totalNights,
-    overallCheckInDate,
-    overallCheckOutDate,
-  };
-};
+// calculateBookingTotals moved to PricingService
 
 
 export const getAvailableRooms = async (req: Request, res: Response) => {
@@ -704,7 +514,7 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
 
     // Fetch all matching rooms
     let rooms = await Room.find(roomFilter)
-      .populate("roomType", "name description basePrice")
+      .populate("roomType", "name description basePrice discountPercentage")
       .populate("amenities", "name icon")
       .lean();
 
@@ -759,14 +569,13 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
           ? "No remaining slots for this room type on these dates"
           : undefined;
 
-        // Calculate dynamic pricing
-        const roomTypeBasePrice = (room.roomType as IPopulatedRoomType | null)?.basePrice ?? 0;
-        const pricing = await calculateDateWisePricing(
+        const roomTypeBasePrice = ((room.roomType as IPopulatedRoomType | null)?.basePrice ?? 0);
+        const pricing = await PricingService.calculateDateWisePricing(
           room._id,
           checkInDate,
           checkOutDate,
           roomTypeBasePrice,
-          room.discountPercentage || 0
+          (room.roomType as any)?.discountPercentage || 0
         );
 
         // Apply price range filter
@@ -785,7 +594,6 @@ export const getAvailableRooms = async (req: Request, res: Response) => {
             maxAdults: room.maxAdults,
             maxChildren: room.maxChildren,
             basePrice: roomTypeBasePrice,
-            discountPercentage: room.discountPercentage || 0,
           },
           roomType: room.roomType,
           amenities: room.amenities,
@@ -931,7 +739,7 @@ export const createBooking = async (req: Request, res: Response) => {
 
       const totalGuests = Number(adults) + Number(children);
       const pkgPrice = dayAccessPackage.adult_price || 0; 
-      totals = await calculateBookingTotals(
+      totals = await PricingService.calculateBookingTotals(
         [],
         bookingType,
         corporateDetails,
@@ -968,13 +776,13 @@ export const createBooking = async (req: Request, res: Response) => {
         }
 
         // Fetch room base price for calculation
-        const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
-        const pricing = await calculateDateWisePricing(
+        const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice discountPercentage");
+        const pricing = await PricingService.calculateDateWisePricing(
           room.roomId,
           new Date(room.checkInDate),
           new Date(room.checkOutDate),
-          (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
-          roomInfo?.discountPercentage || 0,
+          (roomInfo?.roomType as any)?.basePrice || 0,
+          (roomInfo?.roomType as any)?.discountPercentage || 0,
           bookingType === "Corporate" ? corporateDetails?.negotiatedRate : undefined
         );
 
@@ -993,7 +801,7 @@ export const createBooking = async (req: Request, res: Response) => {
         });
       }
 
-      totals = await calculateBookingTotals(validatedRooms, bookingType, corporateDetails, bookingCategory, undefined, undefined, undefined, 12, addons);
+      totals = await PricingService.calculateBookingTotals(validatedRooms, bookingType, corporateDetails, bookingCategory, undefined, undefined, undefined, 12, addons);
     } else if (roomTypesData?.length || roomTypeData) {
       // Normalize: old single-object format → array of 1
       const entries: any[] = roomTypesData?.length
@@ -1098,7 +906,7 @@ export const createBooking = async (req: Request, res: Response) => {
       const overallNights =
         differenceInDays(overallCheckOut!, overallCheckIn!) || 1;
 
-      totals = await calculateBookingTotals(validatedRooms, bookingType, corporateDetails, bookingCategory, undefined, undefined, undefined, 12, addons);
+      totals = await PricingService.calculateBookingTotals(validatedRooms, bookingType, corporateDetails, bookingCategory, undefined, undefined, undefined, 12, addons);
     } else {
       await session.abortTransaction();
       return res.status(400).json({
@@ -1416,7 +1224,7 @@ export const updateBooking = async (req: Request, res: Response) => {
       
       const pkg = await DayAccessPackage.findById(existingBooking.accessPackageId);
       const pkgPrice = pkg?.adult_price || 0;
-      totals = await calculateBookingTotals(
+      totals = await PricingService.calculateBookingTotals(
         [],
         existingBooking.bookingType,
         corporateDetails || existingBooking.corporateDetails,
@@ -1447,13 +1255,13 @@ export const updateBooking = async (req: Request, res: Response) => {
             });
           }
           
-          const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice");
-          const pricing = await calculateDateWisePricing(
+          const roomInfo = await Room.findById(room.roomId).populate("roomType", "basePrice discountPercentage");
+          const pricing = await PricingService.calculateDateWisePricing(
             room.roomId,
             new Date(room.checkInDate),
             new Date(room.checkOutDate),
-            (roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0,
-            roomInfo?.discountPercentage || 0,
+            (roomInfo?.roomType as any)?.basePrice || 0,
+            (roomInfo?.roomType as any)?.discountPercentage || 0,
             existingBooking.bookingType === "Corporate" ? corporateDetails?.negotiatedRate || existingBooking.corporateDetails?.negotiatedRate : undefined
           );
 
@@ -1469,7 +1277,7 @@ export const updateBooking = async (req: Request, res: Response) => {
           });
         }
         updatedRooms = validatedRooms;
-        totals = await calculateBookingTotals(
+        totals = await PricingService.calculateBookingTotals(
           validatedRooms, 
           existingBooking.bookingType, 
           corporateDetails || existingBooking.corporateDetails, 
@@ -1561,12 +1369,12 @@ export const updateBooking = async (req: Request, res: Response) => {
         const overallNights = differenceInDays(overallCheckOut!, overallCheckIn!) || 1;
 
         updatedRooms = validatedRooms;
-        totals = await calculateBookingTotals(
-          validatedRooms, 
-          existingBooking.bookingType, 
-          corporateDetails || existingBooking.corporateDetails, 
-          existingBooking.bookingCategory, 
-          undefined, undefined, undefined, 12, 
+        totals = await PricingService.calculateBookingTotals(
+          validatedRooms,
+          existingBooking.bookingType,
+          corporateDetails || existingBooking.corporateDetails,
+          existingBooking.bookingCategory,
+          undefined, undefined, undefined, 12,
           addons || existingBooking.addons || []
         );
       }

@@ -311,13 +311,16 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         const roomInfo = await Room.findById(roomId).populate({ path: "roomType", populate: { path: "gstId" } }).session(mongoSession);
         const rt: any = roomInfo?.roomType;
         const taxPercentage = rt?.gstId?.percentage || 0;
+        const basePrice = rt?.basePrice || 0;
+        const discountPercentage = rt?.discountPercentage || 0;
+        const discountedPrice = basePrice * (1 - discountPercentage / 100);
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || sel.pricePerNight || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
-          appliedPrice: sel.appliedPrice || sel.pricePerNight || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          originalPrice: discountedPrice,
+          appliedPrice: discountedPrice,
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -331,12 +334,16 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         const rt: any = roomInfo?.roomType;
         const taxPercentage = rt?.gstId?.percentage || 0;
 
+        const basePrice = rt?.basePrice || 0;
+        const discountPercentage = rt?.discountPercentage || 0;
+        const discountedPrice = basePrice * (1 - discountPercentage / 100);
+
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
-          appliedPrice: sel.appliedPrice || sel.originalPrice || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          originalPrice: sel.originalPrice || discountedPrice,
+          appliedPrice: sel.appliedPrice || sel.originalPrice || discountedPrice,
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -978,7 +985,7 @@ export const getCheckInList = async (req: Request, res: Response) => {
       })
       .populate({
         path: "roomDetails.roomType",
-        select: "name basePrice"
+        select: "name basePrice discountPercentage"
       })
       .sort(sortObj as any)
       .skip(skip)
@@ -1098,13 +1105,18 @@ export const extendStay = async (req: Request, res: Response) => {
       const isAlreadyAdded = checkIn.roomDetails.some(r => r.roomId.toString() === newRoomId);
 
       if (!isAlreadyAdded) {
-        const roomInfo = await Room.findById(newRoomId).populate("roomType", "basePrice");
+        const roomInfo = await Room.findById(newRoomId).populate("roomType", "basePrice discountPercentage");
+        const rt = roomInfo?.roomType as any;
+        const basePrice = rt?.basePrice || 0;
+        const discountPercentage = rt?.discountPercentage || 0;
+        const discountedPrice = basePrice * (1 - discountPercentage / 100);
+
         checkIn.roomDetails.push({
           roomId: roomObjectId,
           roomType: roomInfo?.roomType as any,
           roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string,
-          originalPrice: ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
-          appliedPrice: Number(appliedPrice) || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          originalPrice: discountedPrice,
+          appliedPrice: Number(appliedPrice) || discountedPrice,
           assignedAt: new Date(),
         });
       }
@@ -1188,7 +1200,7 @@ export const getCheckInById = async (req: Request, res: Response) => {
       })
       .populate({
         path: "roomDetails.roomType",
-        select: "name basePrice"
+        select: "name basePrice discountPercentage"
       })
       .lean();
 
@@ -1619,7 +1631,7 @@ export const roomChange = async (req: Request, res: Response) => {
       });
     }
 
-    const newRoom = await Room.findById(newRoomId).populate("roomType", "basePrice").session(mongoSession);
+    const newRoom = await Room.findById(newRoomId).populate("roomType", "basePrice discountPercentage").session(mongoSession);
     if (!newRoom) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
@@ -1635,7 +1647,10 @@ export const roomChange = async (req: Request, res: Response) => {
       differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart))
     );
 
-    const newRoomBasePrice = ((newRoom.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (newRoom.discountPercentage || 0) / 100);
+    const rt: any = newRoom.roomType;
+    const basePrice = rt?.basePrice || 0;
+    const discountPercentage = rt?.discountPercentage || 0;
+    const newRoomBasePrice = basePrice * (1 - discountPercentage / 100);
 
     checkIn.roomDetails = [
       {
