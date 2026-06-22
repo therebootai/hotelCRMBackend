@@ -9,7 +9,6 @@ export interface IRoom extends Document {
   maxChildren: number;
   extraBedAllowed: boolean;
   extraBedCharge: number;
-  basePrice: number;
   discountPercentage: number;
   roomSize?: number;
   viewType?: string;
@@ -30,7 +29,6 @@ const RoomSchema = new Schema<IRoom>(
     extraBedAllowed: { type: Boolean, default: false },
     extraBedCharge: { type: Number, default: 0 },
 
-    basePrice: { type: Number, default: 0 },
     discountPercentage: { type: Number, default: 0 },
     
     roomSize: { type: Number },

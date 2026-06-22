@@ -60,6 +60,15 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
+    const guestAdditionalDocFiles: UploadedFile[] = [];
+    if (files.guestAdditionalDocs) {
+      if (Array.isArray(files.guestAdditionalDocs)) {
+        guestAdditionalDocFiles.push(...files.guestAdditionalDocs);
+      } else {
+        guestAdditionalDocFiles.push(files.guestAdditionalDocs);
+      }
+    }
+
     let signedGRCFile: UploadedFile | null = null;
     if (files.signedGRC) {
       signedGRCFile = Array.isArray(files.signedGRC) ? files.signedGRC[0] : files.signedGRC;
@@ -84,6 +93,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       guestDocIndices = typeof rawIndices === "string"
         ? JSON.parse(rawIndices)
         : rawIndices;
+    }
+
+    let guestAdditionalDocIndices: { guestIdx: number; docIdx: number }[] = [];
+    const rawAdditionalIndices = req.body.guestAdditionalDocIndices;
+    if (rawAdditionalIndices) {
+      guestAdditionalDocIndices = typeof rawAdditionalIndices === "string"
+        ? JSON.parse(rawAdditionalIndices)
+        : rawAdditionalIndices;
     }
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
 
@@ -119,6 +136,23 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       } catch (uploadErr) {
         console.error("Guest doc upload failed:", uploadErr);
         guestDocMap[guestId] = { public_id: "", secure_url: "" };
+      }
+    }
+
+    for (let i = 0; i < guestAdditionalDocFiles.length; i++) {
+      const file = guestAdditionalDocFiles[i];
+      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? { guestIdx: -1, docIdx: -1 };
+      
+      if (guestIdx >= 0 && docIdx >= 0 && parsedGuests[guestIdx]?.additionalIds?.[docIdx]) {
+        try {
+          const result = await uploadFile(file.tempFilePath, "guest-additional-documents", file.mimetype);
+          parsedGuests[guestIdx].additionalIds[docIdx].idDocument = {
+            public_id: result.public_id,
+            secure_url: result.secure_url,
+          };
+        } catch (uploadErr) {
+          console.error("Guest additional doc upload failed:", uploadErr);
+        }
       }
     }
 
@@ -183,8 +217,8 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       selections = booking?.rooms.map((r: any) => ({
         roomId: r.roomId,
         roomType: r.roomType,
-        originalPrice: r.pricePerNight || 0,
-        appliedPrice: r.pricePerNight || 0,
+        originalPrice: Math.round(r.pricePerNight || 0),
+        appliedPrice: Math.round(r.pricePerNight || 0),
         hasExtraBed: r.hasExtraBed || false,
         extraBedCharge: r.extraBedCharge || 0,
       }));
@@ -235,6 +269,11 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           ? new mongoose.Types.ObjectId(g.assignedRoomId)
           : undefined,
         idDocument: finalDoc,
+        idDocuments: g.additionalIds?.map((add: any) => ({
+             idType: add.idType || "",
+             idNumber: add.idNumber || "",
+             idDocument: add.idDocument || { public_id: "", secure_url: "" }
+         })) || []
       };
     });
 
@@ -311,13 +350,16 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         const roomInfo = await Room.findById(roomId).populate({ path: "roomType", populate: { path: "gstId" } }).session(mongoSession);
         const rt: any = roomInfo?.roomType;
         const taxPercentage = rt?.gstId?.percentage || 0;
+        const basePrice = rt?.basePrice || 0;
+        const discountPercentage = rt?.discountPercentage || 0;
+        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || sel.pricePerNight || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
-          appliedPrice: sel.appliedPrice || sel.pricePerNight || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          originalPrice: discountedPrice,
+          appliedPrice: discountedPrice,
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -331,12 +373,16 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         const rt: any = roomInfo?.roomType;
         const taxPercentage = rt?.gstId?.percentage || 0;
 
+        const basePrice = rt?.basePrice || 0;
+        const discountPercentage = rt?.discountPercentage || 0;
+        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
+
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
-          originalPrice: sel.originalPrice || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
-          appliedPrice: sel.appliedPrice || sel.originalPrice || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          originalPrice: Math.round(sel.originalPrice || discountedPrice),
+          appliedPrice: Math.round(sel.appliedPrice || sel.originalPrice || discountedPrice),
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -353,23 +399,23 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       let actualTaxAmount = 0;
 
       roomDetails.forEach((r: any) => {
-        const roomBaseTotal = (r.appliedPrice || 0) * nights;
+        const roomBaseTotal = Math.round((r.appliedPrice || 0) * nights);
         actualRoomTotal += roomBaseTotal;
         const taxPct = r._taxPercentage || 0;
-        actualTaxAmount += roomBaseTotal * (taxPct / 100);
+        actualTaxAmount += Math.round(roomBaseTotal * (taxPct / 100));
       });
 
       const combinedAddons = booking ? (booking.addons || []) : (extraServices || []);
 
-      const addonTotal = combinedAddons.reduce(
+      const addonTotal = Math.round(combinedAddons.reduce(
         (s: number, a: any) => s + (Number(a.total) || 0),
         0,
-      );
+      ));
       
-      const addonTaxTotal = combinedAddons.reduce(
+      const addonTaxTotal = Math.round(combinedAddons.reduce(
         (s: number, a: any) => s + ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0) / 100),
         0,
-      );
+      ));
       
       actualTaxAmount = Math.round(actualTaxAmount + addonTaxTotal);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
@@ -978,7 +1024,7 @@ export const getCheckInList = async (req: Request, res: Response) => {
       })
       .populate({
         path: "roomDetails.roomType",
-        select: "name basePrice"
+        select: "name basePrice discountPercentage"
       })
       .sort(sortObj as any)
       .skip(skip)
@@ -1098,13 +1144,18 @@ export const extendStay = async (req: Request, res: Response) => {
       const isAlreadyAdded = checkIn.roomDetails.some(r => r.roomId.toString() === newRoomId);
 
       if (!isAlreadyAdded) {
-        const roomInfo = await Room.findById(newRoomId).populate("roomType", "basePrice");
+        const roomInfo = await Room.findById(newRoomId).populate("roomType", "basePrice discountPercentage");
+        const rt = roomInfo?.roomType as any;
+        const basePrice = rt?.basePrice || 0;
+        const discountPercentage = rt?.discountPercentage || 0;
+        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
+
         checkIn.roomDetails.push({
           roomId: roomObjectId,
           roomType: roomInfo?.roomType as any,
           roomNumber: (roomNumberStr || roomInfo?.roomNumber || "") as string,
-          originalPrice: ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
-          appliedPrice: Number(appliedPrice) || ((roomInfo?.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (roomInfo?.discountPercentage || 0) / 100),
+          originalPrice: discountedPrice,
+          appliedPrice: Math.round(Number(appliedPrice) || discountedPrice),
           assignedAt: new Date(),
         });
       }
@@ -1188,7 +1239,7 @@ export const getCheckInById = async (req: Request, res: Response) => {
       })
       .populate({
         path: "roomDetails.roomType",
-        select: "name basePrice"
+        select: "name basePrice discountPercentage"
       })
       .lean();
 
@@ -1254,6 +1305,15 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       }
     }
 
+    const guestAdditionalDocFiles: UploadedFile[] = [];
+    if (files.guestAdditionalDocs) {
+      if (Array.isArray(files.guestAdditionalDocs)) {
+        guestAdditionalDocFiles.push(...files.guestAdditionalDocs);
+      } else {
+        guestAdditionalDocFiles.push(files.guestAdditionalDocs);
+      }
+    }
+
     const guestDocMap: Record<string, { public_id: string; secure_url: string }> = {};
 
     let guestDocIndices: number[] = [];
@@ -1262,6 +1322,14 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       guestDocIndices = typeof rawIndices === "string"
         ? JSON.parse(rawIndices)
         : rawIndices;
+    }
+
+    let guestAdditionalDocIndices: { guestIdx: number; docIdx: number }[] = [];
+    const rawAdditionalIndices = req.body.guestAdditionalDocIndices;
+    if (rawAdditionalIndices) {
+      guestAdditionalDocIndices = typeof rawAdditionalIndices === "string"
+        ? JSON.parse(rawAdditionalIndices)
+        : rawAdditionalIndices;
     }
 
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
@@ -1280,6 +1348,23 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       } catch (uploadErr) {
         console.error("Guest doc upload failed:", uploadErr);
         guestDocMap[guestId] = { public_id: "", secure_url: "" };
+      }
+    }
+
+    for (let i = 0; i < guestAdditionalDocFiles.length; i++) {
+      const file = guestAdditionalDocFiles[i];
+      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? { guestIdx: -1, docIdx: -1 };
+      
+      if (guestIdx >= 0 && docIdx >= 0 && parsedGuests[guestIdx]?.additionalIds?.[docIdx]) {
+        try {
+          const result = await uploadFile(file.tempFilePath, "guest-additional-documents", file.mimetype);
+          parsedGuests[guestIdx].additionalIds[docIdx].idDocument = {
+            public_id: result.public_id,
+            secure_url: result.secure_url,
+          };
+        } catch (uploadErr) {
+          console.error("Guest additional doc upload failed:", uploadErr);
+        }
       }
     }
 
@@ -1317,6 +1402,11 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
             ? new mongoose.Types.ObjectId(g.assignedRoomId)
             : existingGuest?.assignedRoomId,
           idDocument: finalIdDocument,
+          idDocuments: g.additionalIds?.map((add: any) => ({
+             idType: add.idType || "",
+             idNumber: add.idNumber || "",
+             idDocument: add.idDocument || { public_id: "", secure_url: "" }
+         })) || existingGuest?.idDocuments || [],
           relationship: g.relationship || existingGuest?.relationship || "",
           dateOfBirth: g.dateOfBirth ? new Date(g.dateOfBirth) : existingGuest?.dateOfBirth,
           livePhoto: existingGuest?.livePhoto,
@@ -1359,8 +1449,8 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
         roomId: new mongoose.Types.ObjectId(r.roomId),
         roomType: r.roomType ? new mongoose.Types.ObjectId(r.roomType) : undefined,
         roomNumber: r.roomNumber || "",
-        originalPrice: r.originalPrice || 0,
-        appliedPrice: r.appliedPrice || r.originalPrice || 0,
+        originalPrice: Math.round(r.originalPrice || 0),
+        appliedPrice: Math.round(r.appliedPrice || r.originalPrice || 0),
         assignedAt: new Date(),
       }));
     }
@@ -1619,7 +1709,7 @@ export const roomChange = async (req: Request, res: Response) => {
       });
     }
 
-    const newRoom = await Room.findById(newRoomId).populate("roomType", "basePrice").session(mongoSession);
+    const newRoom = await Room.findById(newRoomId).populate("roomType", "basePrice discountPercentage").session(mongoSession);
     if (!newRoom) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
@@ -1635,7 +1725,10 @@ export const roomChange = async (req: Request, res: Response) => {
       differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart))
     );
 
-    const newRoomBasePrice = ((newRoom.roomType as unknown as IPopulatedRoomType | null)?.basePrice || 0) * (1 - (newRoom.discountPercentage || 0) / 100);
+    const rt: any = newRoom.roomType;
+    const basePrice = rt?.basePrice || 0;
+    const discountPercentage = rt?.discountPercentage || 0;
+    const newRoomBasePrice = basePrice * (1 - discountPercentage / 100);
 
     checkIn.roomDetails = [
       {

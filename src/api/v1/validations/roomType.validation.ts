@@ -17,6 +17,12 @@ export const createRoomTypeSchema = z.object({
       .number({ message: "Base price is required" })
       .min(0, "Price cannot be negative"),
 
+    discountPercentage: z
+      .number()
+      .min(0)
+      .max(100)
+      .optional()
+      .default(0),
   }),
 });
 
@@ -40,6 +46,12 @@ export const updateRoomTypeSchema = z.object({
     basePrice: z
       .number()
       .min(0, "Price cannot be negative")
+      .optional(),
+
+    discountPercentage: z
+      .number()
+      .min(0)
+      .max(100)
       .optional(),
   }),
 });

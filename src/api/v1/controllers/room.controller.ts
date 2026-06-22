@@ -29,10 +29,9 @@ export const createRoom = async (
     }
 
     const roomType = await RoomType.findById(roomData.roomType).session(session);
-    if (roomData.basePrice === undefined || roomData.basePrice === null) {
-      roomData.basePrice = roomType?.basePrice ?? 0;
+    if (!roomType) {
+      throw new Error("Invalid room type");
     }
-
     const newRoom = new Room({
       roomNumber: roomData.roomNumber,
       roomType: roomType._id,
@@ -41,8 +40,6 @@ export const createRoom = async (
       isClean: roomData.isClean ?? true,
       hasExtraBed: roomData.hasExtraBed || false,
       extraBedCharge: roomData.extraBedCharge || 0,
-      basePrice: roomData.basePrice || roomType.basePrice,
-      discountPercentage: roomData.discountPercentage || 0,
       roomSize: roomData.roomSize,
       viewType: roomData.viewType,
       amenities: roomData.amenities,
@@ -145,7 +142,7 @@ export const getAllRooms = async (
     // Fetch data and total count concurrently for better performance
     const [rooms, totalCount] = await Promise.all([
       Room.find(filter)
-        .populate("roomType", "name basePrice")
+        .populate("roomType", "name basePrice discountPercentage")
         .populate("amenities", "name icon")
         .sort({ roomNumber: 1 })
         .skip(skip)
@@ -213,11 +210,7 @@ export const updateRoom = async (
       }
     }
 
-    if (updateData.roomType && (updateData.basePrice === undefined || updateData.basePrice === null)) {
-      const roomType = await RoomType.findById(updateData.roomType).session(session);
-      updateData.basePrice = roomType?.basePrice ?? 0;
-    }
-
+    
     const updatedRoom = await Room.findByIdAndUpdate(id, updateData, {
       new: true,
       runValidators: true,
@@ -390,7 +383,7 @@ export const getAvailableRooms = async (
       status: "Active",
       roomType,
       _id: { $nin: Array.from(busyRoomIds) },
-    }).populate("roomType", "name basePrice");
+    }).populate("roomType", "name basePrice discountPercentage");
 
     return res.status(200).json({
       success: true,
