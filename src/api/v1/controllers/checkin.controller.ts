@@ -74,7 +74,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       signedGRCFile = Array.isArray(files.signedGRC) ? files.signedGRC[0] : files.signedGRC;
     }
 
-    if (!signedGRCFile) {
+    let booking = null;
+    if (bookingId) {
+      booking = await Booking.findById(bookingId).session(mongoSession);
+    }
+    
+    const isDayAccess = booking?.bookingCategory === "Day Access" || !!payload.accessPackageId;
+
+    if (!isDayAccess && !signedGRCFile) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
       return res.status(400).json({
@@ -205,10 +212,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
-    let booking = null;
-    if (bookingId) {
-      booking = await Booking.findById(bookingId).session(mongoSession);
-    }
+    // Booking already fetched above
 
     let selections = [];
     if (roomSelections) {
@@ -283,7 +287,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       : (booking?.rooms?.[0]?.checkOutDate || addDays(new Date(), 1));
 
     // Calculate nights for billing (Room Stay only)
-    const isDayAccess = booking?.bookingCategory === "Day Access";
+    // isDayAccess already defined above
 
     let nights = isDayAccess ? 1 : Math.max(1, differenceInDays(
       startOfDay(checkOutTimeVal),
@@ -293,8 +297,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     // Fetch package details if Day Access
     let packageDetails: any = undefined;
     if (isDayAccess) {
-      const accessPackage = booking?.accessPackageId
-        ? await DayAccessPackage.findById(booking?.accessPackageId).lean()
+      const targetPackageId = payload.accessPackageId || booking?.accessPackageId;
+      const accessPackage = targetPackageId
+        ? await DayAccessPackage.findById(targetPackageId).lean()
         : null;
       if (accessPackage) {
         packageDetails = {
@@ -303,6 +308,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           packageType: accessPackage.packageType,
           entryTime: checkInTimeVal,
           exitTime: checkOutTimeVal,
+          taxPercentage: accessPackage.taxPercentage || 0,
         };
       }
     }

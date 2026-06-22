@@ -17,6 +17,7 @@ export interface IDayAccessPackage extends Document {
   duration?: number;
   add_ons: any;
   isActive: boolean;
+  taxPercentage: number;
 }
 
 const DayAccessPackageSchema = new Schema<IDayAccessPackage>(
@@ -50,6 +51,7 @@ const DayAccessPackageSchema = new Schema<IDayAccessPackage>(
       ref: "ExtraService",
     },
     isActive: { type: Boolean, default: true },
+    taxPercentage: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

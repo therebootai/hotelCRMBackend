@@ -406,8 +406,8 @@ export const getBillPreview = async (req: Request, res: Response) => {
     }
 
     // 🆕 No existing bill → fresh preview
-    // Default tax from booking's stored taxPercentage
-    const storedTaxPercent = (checkInData.bookingId as any)?.pricingSummary?.taxPercentage || 12;
+    // Default tax from booking's stored taxPercentage, or from day access package if applicable
+    const storedTaxPercent = (checkInData.bookingId as any)?.pricingSummary?.taxPercentage || (checkInData as any).packageDetails?.taxPercentage || 0;
     const storedTaxGstId = (checkInData.bookingId as any)?.taxGstId || null;
 
     const previewData = {

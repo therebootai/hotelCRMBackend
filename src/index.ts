@@ -35,12 +35,14 @@ import reportingRoutes from "./api/v1/routes/reporting.route";
 
 import { initCheckoutReminderCron } from "./cron/checkoutReminder.cron";
 import { initNoShowCron } from "./cron/noShow.cron";
+import { initDayAccessCheckoutCron } from "./cron/dayAccessCheckout.cron";
 
 const app = express();
 
 // Initialize cron jobs
-initCheckoutReminderCron();
-initNoShowCron();
+  initCheckoutReminderCron();
+  initNoShowCron();
+  initDayAccessCheckoutCron();
 
 app.use(
   cors({
