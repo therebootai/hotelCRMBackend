@@ -32,6 +32,7 @@ export const createAccessPackage = async (
       exit_time,
       add_ons,
       isActive,
+      taxPercentage,
     } = req.body;
 
     const existingPackage = await DayAccessPackage.findOne({ package_id }).session(session);
@@ -62,6 +63,7 @@ export const createAccessPackage = async (
       exit_time,
       add_ons,
       isActive,
+      taxPercentage,
     });
 
     await newPackage.save({ session });

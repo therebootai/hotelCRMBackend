@@ -60,6 +60,7 @@ export const createAccessPackageSchema = z.object({
         .optional(),
 
       isActive: z.boolean().optional(),
+      taxPercentage: z.number().min(0).optional(),
     })
     .refine(
       (data) => {
@@ -111,6 +112,8 @@ export const updateAccessPackageSchema = z.object({
         .optional(),
       add_ons: z.array(z.string()).optional(),
       isActive: z.boolean().optional(),
+      package_id: z.string().optional(),
+      taxPercentage: z.number().min(0).optional(),
     })
     .strict()
     .refine(

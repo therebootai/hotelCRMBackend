@@ -70,11 +70,12 @@ export class PricingService {
     dayAccessPackagePrice?: number,
     adultsCount: number = 1,
     childrenCount: number = 0,
-    taxPercentage: number = 12,
-    addons: any[] = []
+    taxPercentage: number = 0,
+    addons: any[] = [],
+    dayAccessPackageChildPrice?: number
   ) {
     if (bookingCategory === "Day Access") {
-      const packageTotal = (dayAccessPackagePrice || 0) * (adultsCount + childrenCount);
+      const packageTotal = (dayAccessPackagePrice || 0) * adultsCount + (dayAccessPackageChildPrice || 0) * childrenCount;
       const discountAmount = 0;
       
       let addonTotal = 0;

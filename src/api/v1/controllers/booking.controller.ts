@@ -355,7 +355,7 @@ export const createOrUpdateBilling = async (
 
   subTotal += addonsTotal;
 
-  const roomTaxPercentage = taxPercentageArg ?? 12; // Use passed taxPercentage or default 12%
+  const roomTaxPercentage = taxPercentageArg ?? 0; // Use passed taxPercentage or default 0%
   const roomTaxAmount = ((bookingCategory === "Day Access" ? subTotal : totalRoomCharges) * roomTaxPercentage) / 100;
   const taxAmount = roomTaxAmount + serviceTaxAmount;
   
@@ -747,8 +747,9 @@ export const createBooking = async (req: Request, res: Response) => {
         pkgPrice,
         Number(adults),
         Number(children),
-        12, // Default 12% for Day Access packages
-        addons
+        dayAccessPackage.taxPercentage || 0, // Package tax percentage
+        addons,
+        dayAccessPackage.child_price || 0 // Pass child price
       );
     } else if (rooms && rooms.length > 0) {
       for (const room of rooms) {
