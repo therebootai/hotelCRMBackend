@@ -109,7 +109,7 @@ class WABridgeService {
   async sendCheckoutReminder(phone: string, name: string, checkoutDate: Date): Promise<void> {
     const vars = [
       name || "Guest",
-      format(checkoutDate, "dd MMM yyyy, 11:00 AM") // assuming 11 AM checkout, or we can use time
+      format(checkoutDate, "dd MMM yyyy, 11:00 'AM'") // assuming 11 AM checkout, or we can use time
     ];
     await this.sendTemplate(phone, this.templateCheckoutReminder, vars);
   }
