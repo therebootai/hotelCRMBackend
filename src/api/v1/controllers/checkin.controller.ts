@@ -21,15 +21,18 @@ interface IPopulatedRoomType {
   name?: string;
 }
 
-export const processCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
+export const processCheckIn = async (
+  req: Request & { files?: UploadedFiles },
+  res: Response,
+) => {
   const mongoSession = await mongoose.startSession();
   mongoSession.startTransaction();
 
   try {
-
-    const payload = typeof req.body.payload === "string"
-      ? JSON.parse(req.body.payload)
-      : req.body;
+    const payload =
+      typeof req.body.payload === "string"
+        ? JSON.parse(req.body.payload)
+        : req.body;
 
     const {
       bookingId,
@@ -71,50 +74,76 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     let signedGRCFile: UploadedFile | null = null;
     if (files.signedGRC) {
-      signedGRCFile = Array.isArray(files.signedGRC) ? files.signedGRC[0] : files.signedGRC;
+      signedGRCFile = Array.isArray(files.signedGRC)
+        ? files.signedGRC[0]
+        : files.signedGRC;
     }
 
     let booking = null;
     if (bookingId) {
       booking = await Booking.findById(bookingId).session(mongoSession);
     }
-    
-    const isDayAccess = booking?.bookingCategory === "Day Access" || !!payload.accessPackageId;
+
+    const isDayAccess =
+      booking?.bookingCategory === "Day Access" || !!payload.accessPackageId;
 
     if (!isDayAccess && !signedGRCFile) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
       return res.status(400).json({
         success: false,
-        message: "GRC must be signed before check-in. Please upload the signed document.",
+        message:
+          "GRC must be signed before check-in. Please upload the signed document.",
       });
     }
 
-
-    const guestDocMap: Record<string, { public_id: string; secure_url: string }> = {};
-
+    const guestDocMap: Record<
+      string,
+      { public_id: string; secure_url: string }
+    > = {};
 
     let guestDocIndices: number[] = [];
     const rawIndices = req.body.guestDocIndices;
     if (rawIndices) {
-      guestDocIndices = typeof rawIndices === "string"
-        ? JSON.parse(rawIndices)
-        : rawIndices;
+      guestDocIndices =
+        typeof rawIndices === "string" ? JSON.parse(rawIndices) : rawIndices;
     }
 
     let guestAdditionalDocIndices: { guestIdx: number; docIdx: number }[] = [];
     const rawAdditionalIndices = req.body.guestAdditionalDocIndices;
     if (rawAdditionalIndices) {
-      guestAdditionalDocIndices = typeof rawAdditionalIndices === "string"
-        ? JSON.parse(rawAdditionalIndices)
-        : rawAdditionalIndices;
+      guestAdditionalDocIndices =
+        typeof rawAdditionalIndices === "string"
+          ? JSON.parse(rawAdditionalIndices)
+          : rawAdditionalIndices;
     }
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
 
-    const mobileNumbers = parsedGuests.map((g: any) => g.mobileNo?.trim()).filter(Boolean);
-    const idNumbers = parsedGuests.map((g: any) => g.idNumber?.trim()).filter(Boolean);
+    const mobileNumbers = parsedGuests
+      .map((g: any) => g.mobileNo?.trim())
+      .filter(Boolean);
+    const idNumbers = parsedGuests
+      .map((g: any) => g.idNumber?.trim())
+      .filter(Boolean);
 
+    if (mobileNumbers.length > 0 || idNumbers.length > 0) {
+      const orConditions: any[] = [];
+      if (mobileNumbers.length > 0)
+        orConditions.push({ "guests.mobileNo": { $in: mobileNumbers } });
+      if (idNumbers.length > 0)
+        orConditions.push({ "guests.idNumber": { $in: idNumbers } });
 
+      const existingCheckIn = await CheckIn.findOne({
+        status: "Active",
+        $or: orConditions,
+      }).session(mongoSession);
+
+      if (existingCheckIn) {
+        throw new Error(
+          "One or more guests are already checked in. Please check them out before creating a new check-in.",
+        );
+      }
+    }
 
     for (let i = 0; i < guestDocFiles.length; i++) {
       const file = guestDocFiles[i];
@@ -122,7 +151,11 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       const guestId = parsedGuests[guestIndex]?.id || `guest_${guestIndex}`;
 
       try {
-        const result = await uploadFile(file.tempFilePath, "guest-documents", file.mimetype);
+        const result = await uploadFile(
+          file.tempFilePath,
+          "guest-documents",
+          file.mimetype,
+        );
         guestDocMap[guestId] = {
           public_id: result.public_id,
           secure_url: result.secure_url,
@@ -135,11 +168,22 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     for (let i = 0; i < guestAdditionalDocFiles.length; i++) {
       const file = guestAdditionalDocFiles[i];
-      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? { guestIdx: -1, docIdx: -1 };
-      
-      if (guestIdx >= 0 && docIdx >= 0 && parsedGuests[guestIdx]?.additionalIds?.[docIdx]) {
+      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? {
+        guestIdx: -1,
+        docIdx: -1,
+      };
+
+      if (
+        guestIdx >= 0 &&
+        docIdx >= 0 &&
+        parsedGuests[guestIdx]?.additionalIds?.[docIdx]
+      ) {
         try {
-          const result = await uploadFile(file.tempFilePath, "guest-additional-documents", file.mimetype);
+          const result = await uploadFile(
+            file.tempFilePath,
+            "guest-additional-documents",
+            file.mimetype,
+          );
           parsedGuests[guestIdx].additionalIds[docIdx].idDocument = {
             public_id: result.public_id,
             secure_url: result.secure_url,
@@ -150,12 +194,15 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
-
     let signedGRCData: { public_id: string; secure_url: string } | null = null;
 
     if (signedGRCFile && signedGRCFile.tempFilePath) {
       try {
-        const result = await uploadFile(signedGRCFile.tempFilePath, "signed-grc", signedGRCFile.mimetype);
+        const result = await uploadFile(
+          signedGRCFile.tempFilePath,
+          "signed-grc",
+          signedGRCFile.mimetype,
+        );
         signedGRCData = {
           public_id: result.public_id,
           secure_url: result.secure_url,
@@ -175,7 +222,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
-    const dynamicDocTypes: string[] = req.body.dynamicDocTypes 
+    const dynamicDocTypes: string[] = req.body.dynamicDocTypes
       ? JSON.parse(req.body.dynamicDocTypes)
       : [];
 
@@ -184,7 +231,11 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       const file = dynamicFiles[i];
       const type = dynamicDocTypes[i] || "Other";
       try {
-        const result = await uploadFile(file.tempFilePath, "checkin-documents", file.mimetype);
+        const result = await uploadFile(
+          file.tempFilePath,
+          "checkin-documents",
+          file.mimetype,
+        );
         processedDocuments.push({
           type,
           file: {
@@ -203,7 +254,10 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
 
     let selections = [];
     if (roomSelections) {
-      selections = typeof roomSelections === 'string' ? JSON.parse(roomSelections) : roomSelections;
+      selections =
+        typeof roomSelections === "string"
+          ? JSON.parse(roomSelections)
+          : roomSelections;
     } else if (booking?.rooms && booking?.rooms.length > 0) {
       selections = booking?.rooms.map((r: any) => ({
         roomId: r.roomId,
@@ -216,11 +270,15 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     }
 
     const parsedPayments = advancePayments
-      ? (typeof advancePayments === 'string' ? JSON.parse(advancePayments) : advancePayments)
+      ? typeof advancePayments === "string"
+        ? JSON.parse(advancePayments)
+        : advancePayments
       : [];
 
     const parsedCorporateData = corporateData
-      ? (typeof corporateData === 'string' ? JSON.parse(corporateData) : corporateData)
+      ? typeof corporateData === "string"
+        ? JSON.parse(corporateData)
+        : corporateData
       : {};
 
     const parsedVehicles = vehicleDetails || [];
@@ -229,7 +287,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     const createdCheckIns = [];
 
     const grcNumber = `GRC-${Date.now().toString().slice(-6)}`;
-    const checkInId = `CHK-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-6)}`;
+    const checkInId = `CHK-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-6)}`;
 
     const guestList = parsedGuests.map((g: any, idx: number) => {
       const guestId = g.id || `guest_${idx}`;
@@ -242,7 +300,10 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       let finalDoc = { public_id: "", secure_url: "" };
       if (uploadedDoc?.secure_url) {
         finalDoc = uploadedDoc;
-      } else if (g.idDocument?.secure_url && g.idDocument.secure_url.startsWith("http")) {
+      } else if (
+        g.idDocument?.secure_url &&
+        g.idDocument.secure_url.startsWith("http")
+      ) {
         // Document URL passed from frontend (existing document)
         finalDoc = g.idDocument;
       }
@@ -260,31 +321,38 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           ? new mongoose.Types.ObjectId(g.assignedRoomId)
           : undefined,
         idDocument: finalDoc,
-        idDocuments: g.additionalIds?.map((add: any) => ({
-             idType: add.idType || "",
-             idNumber: add.idNumber || "",
-             idDocument: add.idDocument || { public_id: "", secure_url: "" }
-         })) || []
+        idDocuments:
+          g.additionalIds?.map((add: any) => ({
+            idType: add.idType || "",
+            idNumber: add.idNumber || "",
+            idDocument: add.idDocument || { public_id: "", secure_url: "" },
+          })) || [],
       };
     });
 
     const checkInTimeVal = checkInTime ? new Date(checkInTime) : new Date();
     const checkOutTimeVal = expectedCheckOutTime
       ? new Date(expectedCheckOutTime)
-      : (booking?.rooms?.[0]?.checkOutDate || addDays(new Date(), 1));
+      : booking?.rooms?.[0]?.checkOutDate || addDays(new Date(), 1);
 
     // Calculate nights for billing (Room Stay only)
     // isDayAccess already defined above
 
-    let nights = isDayAccess ? 1 : Math.max(1, differenceInDays(
-      startOfDay(checkOutTimeVal),
-      startOfDay(checkInTimeVal)
-    ));
+    let nights = isDayAccess
+      ? 1
+      : Math.max(
+          1,
+          differenceInDays(
+            startOfDay(checkOutTimeVal),
+            startOfDay(checkInTimeVal),
+          ),
+        );
 
     // Fetch package details if Day Access
     let packageDetails: any = undefined;
     if (isDayAccess) {
-      const targetPackageId = payload.accessPackageId || booking?.accessPackageId;
+      const targetPackageId =
+        payload.accessPackageId || booking?.accessPackageId;
       const accessPackage = targetPackageId
         ? await DayAccessPackage.findById(targetPackageId).lean()
         : null;
@@ -320,7 +388,9 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         }).session(mongoSession);
 
         if (occupiedCheckIn) {
-          throw new Error(`Room is already occupied by another active check-in (${occupiedCheckIn.checkInId})`);
+          throw new Error(
+            `Room is already occupied by another active check-in (${occupiedCheckIn.checkInId})`,
+          );
         }
 
         // Prevent assigning a room already booked by a different confirmed booking for overlapping dates
@@ -337,15 +407,21 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         }).session(mongoSession);
 
         if (conflictingBooking) {
-          throw new Error(`Room is already assigned to another booking (${conflictingBooking.bookingId}) for these dates`);
+          throw new Error(
+            `Room is already assigned to another booking (${conflictingBooking.bookingId}) for these dates`,
+          );
         }
 
-        const roomInfo = await Room.findById(roomId).populate({ path: "roomType", populate: { path: "gstId" } }).session(mongoSession);
+        const roomInfo = await Room.findById(roomId)
+          .populate({ path: "roomType", populate: { path: "gstId" } })
+          .session(mongoSession);
         const rt: any = roomInfo?.roomType;
         const taxPercentage = rt?.gstId?.percentage || 0;
         const basePrice = rt?.basePrice || 0;
         const discountPercentage = rt?.discountPercentage || 0;
-        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
+        const discountedPrice = Math.round(
+          basePrice * (1 - discountPercentage / 100),
+        );
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
@@ -362,20 +438,26 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       // Day Access: process room selections as flat-priced add-ons
       for (const sel of selections) {
         const roomId = sel.roomId || sel._id;
-        const roomInfo = await Room.findById(roomId).populate({ path: "roomType", populate: { path: "gstId" } }).session(mongoSession);
+        const roomInfo = await Room.findById(roomId)
+          .populate({ path: "roomType", populate: { path: "gstId" } })
+          .session(mongoSession);
         const rt: any = roomInfo?.roomType;
         const taxPercentage = rt?.gstId?.percentage || 0;
 
         const basePrice = rt?.basePrice || 0;
         const discountPercentage = rt?.discountPercentage || 0;
-        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
+        const discountedPrice = Math.round(
+          basePrice * (1 - discountPercentage / 100),
+        );
 
         roomDetails.push({
           roomId: new mongoose.Types.ObjectId(roomId),
           roomType: sel.roomType || roomInfo?.roomType,
           roomNumber: roomInfo?.roomNumber || sel.roomNumber || "",
           originalPrice: Math.round(sel.originalPrice || discountedPrice),
-          appliedPrice: Math.round(sel.appliedPrice || sel.originalPrice || discountedPrice),
+          appliedPrice: Math.round(
+            sel.appliedPrice || sel.originalPrice || discountedPrice,
+          ),
           _taxPercentage: taxPercentage,
           assignedAt: new Date(),
         });
@@ -398,22 +480,29 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         actualTaxAmount += Math.round(roomBaseTotal * (taxPct / 100));
       });
 
-      const combinedAddons = booking ? (booking.addons || []) : (extraServices || []);
+      const combinedAddons = booking
+        ? booking.addons || []
+        : extraServices || [];
 
-      const addonTotal = Math.round(combinedAddons.reduce(
-        (s: number, a: any) => s + (Number(a.total) || 0),
-        0,
-      ));
-      
-      const addonTaxTotal = Math.round(combinedAddons.reduce(
-        (s: number, a: any) => s + ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0) / 100),
-        0,
-      ));
-      
+      const addonTotal = Math.round(
+        combinedAddons.reduce(
+          (s: number, a: any) => s + (Number(a.total) || 0),
+          0,
+        ),
+      );
+
+      const addonTaxTotal = Math.round(
+        combinedAddons.reduce(
+          (s: number, a: any) =>
+            s + ((Number(a.total) || 0) * (Number(a.taxPercentage) || 0)) / 100,
+          0,
+        ),
+      );
+
       actualTaxAmount = Math.round(actualTaxAmount + addonTaxTotal);
       const actualGrandTotal = actualRoomTotal + actualTaxAmount + addonTotal;
       const paidSoFar = (booking?.pricingSummary as any)?.paidAmount || 0;
-      
+
       finalTaxAmount = actualTaxAmount;
       finalGrandTotal = actualGrandTotal;
 
@@ -426,7 +515,10 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
               "pricingSummary.taxAmount": actualTaxAmount,
               "pricingSummary.taxPercentage": 0, // Legacy field, keeping for schema compatibility
               "pricingSummary.grandTotal": actualGrandTotal,
-              "pricingSummary.dueAmount": Math.max(0, actualGrandTotal - paidSoFar),
+              "pricingSummary.dueAmount": Math.max(
+                0,
+                actualGrandTotal - paidSoFar,
+              ),
             },
           },
           { session: mongoSession },
@@ -444,21 +536,35 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       }
     }
 
-    const grcDetails = generateGRC ? [{
-      grcNumber,
-      grcType: checkInType === "Corporate" ? "Corporate" : "Individual",
-      generatedAt: new Date(),
-      generatedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
-      isSigned: !!signedGRCData,
-      signedPdfUrl: signedGRCData ? {
-        public_id: signedGRCData.public_id || "",
-        secure_url: signedGRCData.secure_url || "",
-      } : undefined,
-      signedAt: signedGRCData ? new Date() : undefined,
-      signatureMethod: signedGRCData ? "Digital" : undefined,
-    }] : [];
+    const grcDetails = generateGRC
+      ? [
+          {
+            grcNumber,
+            grcType: checkInType === "Corporate" ? "Corporate" : "Individual",
+            generatedAt: new Date(),
+            generatedBy:
+              (req as any).user?._id || new mongoose.Types.ObjectId(),
+            isSigned: !!signedGRCData,
+            signedPdfUrl: signedGRCData
+              ? {
+                  public_id: signedGRCData.public_id || "",
+                  secure_url: signedGRCData.secure_url || "",
+                }
+              : undefined,
+            signedAt: signedGRCData ? new Date() : undefined,
+            signatureMethod: signedGRCData ? "Digital" : undefined,
+          },
+        ]
+      : [];
 
-    const validPaymentModes = ["Cash", "UPI", "Card", "Bank Transfer", "Wallet", "Online"];
+    const validPaymentModes = [
+      "Cash",
+      "UPI",
+      "Card",
+      "Bank Transfer",
+      "Wallet",
+      "Online",
+    ];
 
     const newCheckIn = new CheckIn({
       checkInId,
@@ -471,9 +577,12 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       expectedCheckOutTime: checkOutTimeVal,
       status: "Active",
       stayType: "Original",
-      paymentStatus: parsedTotalAdvance > 0
-        ? (parsedTotalAdvance >= finalGrandTotal ? "Paid" : "Partial")
-        : "Pending",
+      paymentStatus:
+        parsedTotalAdvance > 0
+          ? parsedTotalAdvance >= finalGrandTotal
+            ? "Paid"
+            : "Partial"
+          : "Pending",
       paymentSummary: {
         totalAmount: finalGrandTotal,
         totalPaid: parsedTotalAdvance,
@@ -482,27 +591,32 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       },
       payments: parsedPayments.map((p: any) => ({
         amount: p.amount,
-        paymentMode: validPaymentModes.includes(p.paymentMode) ? p.paymentMode : "Cash",
+        paymentMode: validPaymentModes.includes(p.paymentMode)
+          ? p.paymentMode
+          : "Cash",
         transactionId: p.transactionId || "",
         paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
         note: p.note || "",
       })),
       grcDetails,
       vehicleDetails: parsedVehicles,
-      addons: (booking ? (booking.addons || []) : (extraServices || [])).map((a: any) => ({
-        name: a.serviceName || a.name,
-        quantity: a.quantity,
-        rate: a.rate,
-        total: a.total,
-        taxPercentage: a.taxPercentage || 0,
-        taxAmount: a.taxAmount || 0,
-      })),
+      addons: (booking ? booking.addons || [] : extraServices || []).map(
+        (a: any) => ({
+          name: a.serviceName || a.name,
+          quantity: a.quantity,
+          rate: a.rate,
+          total: a.total,
+          taxPercentage: a.taxPercentage || 0,
+          taxAmount: a.taxAmount || 0,
+        }),
+      ),
       notes: notes || "",
       specialRequests: specialRequests || "",
       liabilityAccepted: true,
       termsAcceptedAt: new Date(),
       packageDetails: isDayAccess ? packageDetails : undefined,
-      corporateCheckInDetails: checkInType === "Corporate" ? parsedCorporateData : undefined,
+      corporateCheckInDetails:
+        checkInType === "Corporate" ? parsedCorporateData : undefined,
       documents: processedDocuments,
       verificationChecklist: {
         primaryGuestVerified: guestList.some((g: any) => g.isPrimary && g.name),
@@ -511,35 +625,43 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         paymentCollected: parsedTotalAdvance > 0,
         roomAssigned: !isDayAccess && roomDetails.length > 0,
       },
-      activityLogs: [{
-        action: "Check-in Created via Single-Call Process",
-        performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
-        timestamp: new Date(),
-        details: `${checkInType || "Individual"} check-in. ${isDayAccess ? "Day Access" : selections.length + " room(s)"} checked in. ${parsedGuests.length} guest(s).`,
-      }],
+      activityLogs: [
+        {
+          action: "Check-in Created via Single-Call Process",
+          performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
+          timestamp: new Date(),
+          details: `${checkInType || "Individual"} check-in. ${isDayAccess ? "Day Access" : selections.length + " room(s)"} checked in. ${parsedGuests.length} guest(s).`,
+        },
+      ],
     });
 
     await newCheckIn.save({ session: mongoSession });
     createdCheckIns.push(newCheckIn);
 
     // For Day Access bookings, rooms may be empty/undefined — use optional chaining
-    const totalBookedRooms = (booking?.rooms?.length || 0);
+    const totalBookedRooms = booking?.rooms?.length || 0;
     const totalCheckedRooms = createdCheckIns.reduce(
       (sum: number, item: any) => sum + (item.roomDetails?.length || 0),
-      0
+      0,
     );
 
     if (booking) {
-      booking.status = isDayAccess ? "Checked-In" : (totalCheckedRooms >= totalBookedRooms ? "Checked-In" : booking.status);
+      booking.status = isDayAccess
+        ? "Checked-In"
+        : totalCheckedRooms >= totalBookedRooms
+          ? "Checked-In"
+          : booking.status;
       await booking.save({ session: mongoSession });
 
       // Update booking's paidAmount and dueAmount to include check-in payment
       if (parsedTotalAdvance > 0) {
-        const bookingPaidBefore = (booking.pricingSummary as any)?.paidAmount || 0;
+        const bookingPaidBefore =
+          (booking.pricingSummary as any)?.paidAmount || 0;
         const totalPaidNow = bookingPaidBefore + parsedTotalAdvance;
         const grandTotal = (booking.pricingSummary as any)?.grandTotal || 0;
         const newDue = Math.max(0, grandTotal - totalPaidNow);
-        const newPaymentStatus = grandTotal > 0 && totalPaidNow >= grandTotal ? "Paid" : "Partial";
+        const newPaymentStatus =
+          grandTotal > 0 && totalPaidNow >= grandTotal ? "Paid" : "Partial";
 
         await Booking.updateOne(
           { _id: booking._id },
@@ -572,8 +694,14 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         stayType: "Original" as const,
       }));
       // Package price is the base, room add-ons are on top
-      totalRoomCharges = (booking?.pricingSummary?.roomTotal || booking?.pricingSummary?.grandTotal || 0)
-        + roomChargesBreakdown.reduce((sum: number, r: any) => sum + r.totalRoomCharge, 0);
+      totalRoomCharges =
+        (booking?.pricingSummary?.roomTotal ||
+          booking?.pricingSummary?.grandTotal ||
+          0) +
+        roomChargesBreakdown.reduce(
+          (sum: number, r: any) => sum + r.totalRoomCharge,
+          0,
+        );
     } else {
       roomChargesBreakdown = roomDetails.map((room: any) => {
         const rate = room.appliedPrice || 0;
@@ -591,36 +719,49 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       });
       totalRoomCharges = roomChargesBreakdown.reduce(
         (sum: number, r: any) => sum + r.totalRoomCharge,
-        0
+        0,
       );
     }
 
-    const bookingAddonTotal = (booking ? (booking.addons || []) : (extraServices || [])).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
+    const bookingAddonTotal = (
+      booking ? booking.addons || [] : extraServices || []
+    ).reduce((s: number, a: any) => s + (Number(a.total) || 0), 0);
 
-    let billing = await Billing.findOne({ ...(booking ? { bookingId: booking._id } : {}) }).session(mongoSession);
-
+    let billing = await Billing.findOne({
+      ...(booking ? { bookingId: booking._id } : {}),
+    }).session(mongoSession);
 
     if (!billing) {
       const count = await Billing.countDocuments({}).session(mongoSession);
       billing = new Billing({
         invoiceNumber: `INV-${Date.now()}-${count + 1}`,
-        invoiceType: isDayAccess ? "Day Access" : (checkInType === "Corporate" ? "Corporate" : "Room"),
+        invoiceType: isDayAccess
+          ? "Day Access"
+          : checkInType === "Corporate"
+            ? "Corporate"
+            : "Room",
         billingStatus: "Draft",
         settlementStatus: "Open",
         checkInId: newCheckIn._id,
         ...(booking ? { bookingId: booking._id } : {}),
         customerId: booking?.customerId || new mongoose.Types.ObjectId(),
         isCorporateBill: checkInType === "Corporate",
-        corporateDetails: checkInType === "Corporate" && parsedCorporateData ? {
-          companyName: parsedCorporateData.companyName || "",
-          companyGST: parsedCorporateData.companyGST || "",
-          companyAddress: parsedCorporateData.companyAddress || "",
-          contactPerson: parsedCorporateData.contactPersonName || "",
-          contactEmail: parsedCorporateData.contactEmail || "",
-        } : undefined,
+        corporateDetails:
+          checkInType === "Corporate" && parsedCorporateData
+            ? {
+                companyName: parsedCorporateData.companyName || "",
+                companyGST: parsedCorporateData.companyGST || "",
+                companyAddress: parsedCorporateData.companyAddress || "",
+                contactPerson: parsedCorporateData.contactPersonName || "",
+                contactEmail: parsedCorporateData.contactEmail || "",
+              }
+            : undefined,
         roomChargesBreakdown,
         totalRoomCharges,
-        extraServices: (booking ? (booking.addons || []) : (extraServices || [])).map((a: any) => ({
+        extraServices: (booking
+          ? booking.addons || []
+          : extraServices || []
+        ).map((a: any) => ({
           serviceName: a.serviceName || a.name,
           quantity: a.quantity,
           rate: a.rate,
@@ -641,32 +782,54 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
           totalTax: booking?.pricingSummary?.taxAmount || 0,
         },
         discount: 0,
-        grandTotal: totalRoomCharges + bookingAddonTotal + (booking?.pricingSummary?.taxAmount || 0),
+        grandTotal:
+          totalRoomCharges +
+          bookingAddonTotal +
+          (booking?.pricingSummary?.taxAmount || 0),
         paidAmount: parsedTotalAdvance,
-        dueAmount: (totalRoomCharges + bookingAddonTotal + (booking?.pricingSummary?.taxAmount || 0)) - parsedTotalAdvance,
+        dueAmount:
+          totalRoomCharges +
+          bookingAddonTotal +
+          (booking?.pricingSummary?.taxAmount || 0) -
+          parsedTotalAdvance,
         paymentStatus: parsedTotalAdvance > 0 ? "Partial" : "Unpaid",
         paymentModeSummary: {
-          cash: parsedPayments.filter((p: any) => p.paymentMode === "Cash").reduce((s: number, p: any) => s + Number(p.amount), 0),
-          upi: parsedPayments.filter((p: any) => p.paymentMode === "UPI").reduce((s: number, p: any) => s + Number(p.amount), 0),
-          card: parsedPayments.filter((p: any) => p.paymentMode === "Card").reduce((s: number, p: any) => s + Number(p.amount), 0),
-          bankTransfer: parsedPayments.filter((p: any) => p.paymentMode === "Bank Transfer").reduce((s: number, p: any) => s + Number(p.amount), 0),
-          wallet: parsedPayments.filter((p: any) => p.paymentMode === "Wallet").reduce((s: number, p: any) => s + Number(p.amount), 0),
+          cash: parsedPayments
+            .filter((p: any) => p.paymentMode === "Cash")
+            .reduce((s: number, p: any) => s + Number(p.amount), 0),
+          upi: parsedPayments
+            .filter((p: any) => p.paymentMode === "UPI")
+            .reduce((s: number, p: any) => s + Number(p.amount), 0),
+          card: parsedPayments
+            .filter((p: any) => p.paymentMode === "Card")
+            .reduce((s: number, p: any) => s + Number(p.amount), 0),
+          bankTransfer: parsedPayments
+            .filter((p: any) => p.paymentMode === "Bank Transfer")
+            .reduce((s: number, p: any) => s + Number(p.amount), 0),
+          wallet: parsedPayments
+            .filter((p: any) => p.paymentMode === "Wallet")
+            .reduce((s: number, p: any) => s + Number(p.amount), 0),
         },
 
         payments: parsedPayments.map((p: any) => ({
           amount: p.amount,
-          paymentMode: validPaymentModes.includes(p.paymentMode) ? p.paymentMode : "Cash",
+          paymentMode: validPaymentModes.includes(p.paymentMode)
+            ? p.paymentMode
+            : "Cash",
           transactionId: p.transactionId || "",
           paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
           note: p.note || "",
         })),
         billingNotes: [],
-        activityLogs: [{
-          action: "Billing Created on Check-in",
-          performedBy: (req as any).user?._id || new mongoose.Types.ObjectId(),
-          timestamp: new Date(),
-          details: `Check-in billing initiated. Advance: ₹${parsedTotalAdvance}`,
-        }],
+        activityLogs: [
+          {
+            action: "Billing Created on Check-in",
+            performedBy:
+              (req as any).user?._id || new mongoose.Types.ObjectId(),
+            timestamp: new Date(),
+            details: `Check-in billing initiated. Advance: ₹${parsedTotalAdvance}`,
+          },
+        ],
       });
     } else {
       billing.checkInId = newCheckIn._id;
@@ -675,17 +838,20 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         .filter((r: any) => r.roomId != null)
         .map((r: any) => r.roomId.toString());
       const newRoomCharges = roomChargesBreakdown.filter(
-        (r: any) => r.roomId == null || !existingRoomIds.includes(r.roomId.toString())
+        (r: any) =>
+          r.roomId == null || !existingRoomIds.includes(r.roomId.toString()),
       );
 
       if (newRoomCharges.length > 0) {
         billing.roomChargesBreakdown.push(...newRoomCharges);
         billing.totalRoomCharges = billing.roomChargesBreakdown.reduce(
           (sum: number, r: any) => sum + r.totalRoomCharge,
-          0
+          0,
         );
-        billing.subTotal = billing.totalRoomCharges + billing.totalFacilityCharges;
-        billing.grandTotal = billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
+        billing.subTotal =
+          billing.totalRoomCharges + billing.totalFacilityCharges;
+        billing.grandTotal =
+          billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
       }
 
       const newPayments = parsedPayments.filter((p: any, idx: number) => {
@@ -706,26 +872,47 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
       });
 
       if (newPayments.length > 0) {
-        billing.payments.push(...newPayments.map((p: any) => ({
-          amount: p.amount,
-          paymentMode: validPaymentModes.includes(p.paymentMode) ? p.paymentMode : "Cash",
-          transactionId: p.transactionId || "",
-          paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
-          note: p.note || "",
-        })));
+        billing.payments.push(
+          ...newPayments.map((p: any) => ({
+            amount: p.amount,
+            paymentMode: validPaymentModes.includes(p.paymentMode)
+              ? p.paymentMode
+              : "Cash",
+            transactionId: p.transactionId || "",
+            paidAt: p.paidAt ? new Date(p.paidAt) : new Date(),
+            note: p.note || "",
+          })),
+        );
 
-        billing.paidAmount = billing.payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
-        billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
-        billing.paymentStatus = billing.dueAmount <= 0 && billing.grandTotal > 0 ? "Paid"
-          : billing.paidAmount > 0 ? "Partial" : "Unpaid";
+        billing.paidAmount = billing.payments.reduce(
+          (sum: number, p: any) => sum + Number(p.amount),
+          0,
+        );
+        billing.dueAmount = Math.max(
+          0,
+          billing.grandTotal - billing.paidAmount,
+        );
+        billing.paymentStatus =
+          billing.dueAmount <= 0 && billing.grandTotal > 0
+            ? "Paid"
+            : billing.paidAmount > 0
+              ? "Partial"
+              : "Unpaid";
 
         for (const payment of newPayments) {
-          const mode = (payment.paymentMode || "Cash").toLowerCase().replace(" ", "");
-          if (mode === "cash") billing.paymentModeSummary.cash += Number(payment.amount);
-          else if (mode === "upi") billing.paymentModeSummary.upi += Number(payment.amount);
-          else if (mode === "card") billing.paymentModeSummary.card += Number(payment.amount);
-          else if (mode === "banktransfer") billing.paymentModeSummary.bankTransfer += Number(payment.amount);
-          else if (mode === "wallet") billing.paymentModeSummary.wallet += Number(payment.amount);
+          const mode = (payment.paymentMode || "Cash")
+            .toLowerCase()
+            .replace(" ", "");
+          if (mode === "cash")
+            billing.paymentModeSummary.cash += Number(payment.amount);
+          else if (mode === "upi")
+            billing.paymentModeSummary.upi += Number(payment.amount);
+          else if (mode === "card")
+            billing.paymentModeSummary.card += Number(payment.amount);
+          else if (mode === "banktransfer")
+            billing.paymentModeSummary.bankTransfer += Number(payment.amount);
+          else if (mode === "wallet")
+            billing.paymentModeSummary.wallet += Number(payment.amount);
           // Online mode doesn't map to any paymentModeSummary field, but we still track it in payments array
         }
       }
@@ -743,14 +930,16 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     // Notification: check-in completed (skip room-specific notification for Day Access)
     if (!isDayAccess) {
       try {
-        const roomNumbers = roomDetails.map((r: any) => r.roomNumber).join(", ");
+        const roomNumbers = roomDetails
+          .map((r: any) => r.roomNumber)
+          .join(", ");
         await sendNotificationToRole(
           "Housekeeping",
           "housekeeping",
           "Check-in Completed",
           `Guest checked in at Room(s) ${roomNumbers}. Prepare for next checkout.`,
           newCheckIn._id,
-          "CheckIn"
+          "CheckIn",
         );
       } catch (notifErr) {
         console.error("Failed to send checkin notification:", notifErr);
@@ -764,18 +953,23 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
     let phone = "";
     let name = "Guest";
 
-    if (newCheckIn.checkInType === "Corporate" && newCheckIn.corporateCheckInDetails?.contactMobile) {
+    if (
+      newCheckIn.checkInType === "Corporate" &&
+      newCheckIn.corporateCheckInDetails?.contactMobile
+    ) {
       phone = newCheckIn.corporateCheckInDetails.contactMobile;
       name = newCheckIn.corporateCheckInDetails.contactPersonName || "Guest";
     } else if (newCheckIn.guests && newCheckIn.guests.length > 0) {
-      const primaryGuest = newCheckIn.guests.find((g: any) => g.isPrimary) || newCheckIn.guests[0];
+      const primaryGuest =
+        newCheckIn.guests.find((g: any) => g.isPrimary) || newCheckIn.guests[0];
       phone = primaryGuest.mobileNo || "";
       name = primaryGuest.name || "Guest";
     }
 
     if (phone) {
-      waBridgeService.sendCheckIn(phone, name)
-        .catch(err => console.error("WA Check-In Error:", err));
+      waBridgeService
+        .sendCheckIn(phone, name)
+        .catch((err) => console.error("WA Check-In Error:", err));
     }
 
     return res.status(201).json({
@@ -793,9 +987,7 @@ export const processCheckIn = async (req: Request & { files?: UploadedFiles }, r
         },
       },
     });
-
   } catch (error: any) {
-
     await mongoSession.abortTransaction();
     mongoSession.endSession();
 
@@ -845,10 +1037,14 @@ export const getCheckInList = async (req: Request, res: Response) => {
 
     // 1. Room / Room Type Filters
     if (roomId) {
-      andConditions.push({ "roomDetails.roomId": new mongoose.Types.ObjectId(roomId as string) });
+      andConditions.push({
+        "roomDetails.roomId": new mongoose.Types.ObjectId(roomId as string),
+      });
     } else if (roomType) {
-      const roomsUnderType = await Room.find({ roomType: roomType as any }).select("_id").lean();
-      const roomIdsUnderType = roomsUnderType.map(r => r._id);
+      const roomsUnderType = await Room.find({ roomType: roomType as any })
+        .select("_id")
+        .lean();
+      const roomIdsUnderType = roomsUnderType.map((r) => r._id);
       andConditions.push({ "roomDetails.roomId": { $in: roomIdsUnderType } });
     }
 
@@ -890,24 +1086,40 @@ export const getCheckInList = async (req: Request, res: Response) => {
 
     // 5. Room Number & Vehicle Number Filters
     if (roomNumber) {
-      andConditions.push({ "roomDetails.roomNumber": { $regex: roomNumber as string, $options: "i" } });
+      andConditions.push({
+        "roomDetails.roomNumber": {
+          $regex: roomNumber as string,
+          $options: "i",
+        },
+      });
     }
     if (vehicleNumber) {
-      andConditions.push({ "vehicleDetails.vehicleNumber": { $regex: vehicleNumber as string, $options: "i" } });
+      andConditions.push({
+        "vehicleDetails.vehicleNumber": {
+          $regex: vehicleNumber as string,
+          $options: "i",
+        },
+      });
     }
 
     // 6. Check-in ID & Booking ID Filters
     if (checkInId) {
-      andConditions.push({ checkInId: { $regex: checkInId as string, $options: "i" } });
+      andConditions.push({
+        checkInId: { $regex: checkInId as string, $options: "i" },
+      });
     }
     if (bookingId) {
       if (mongoose.Types.ObjectId.isValid(bookingId as string)) {
-        andConditions.push({ bookingId: new mongoose.Types.ObjectId(bookingId as string) });
+        andConditions.push({
+          bookingId: new mongoose.Types.ObjectId(bookingId as string),
+        });
       } else {
-        const matchedBookings = await Booking.find({ bookingId: { $regex: bookingId as string, $options: "i" } })
+        const matchedBookings = await Booking.find({
+          bookingId: { $regex: bookingId as string, $options: "i" },
+        })
           .select("_id")
           .lean();
-        const bookingIds = matchedBookings.map(b => b._id);
+        const bookingIds = matchedBookings.map((b) => b._id);
         andConditions.push({ bookingId: { $in: bookingIds } });
       }
     }
@@ -956,20 +1168,23 @@ export const getCheckInList = async (req: Request, res: Response) => {
     }
 
     if (start && end && quickFilter !== "inHouse") {
-      const targetDateType = quickFilter === "upcomingCheckout" ? "expectedCheckout" : dateType;
+      const targetDateType =
+        quickFilter === "upcomingCheckout" ? "expectedCheckout" : dateType;
 
       if (targetDateType === "checkIn") {
         andConditions.push({ checkInTime: { $gte: start, $lte: end } });
       } else if (targetDateType === "expectedCheckout") {
-        andConditions.push({ expectedCheckOutTime: { $gte: start, $lte: end } });
+        andConditions.push({
+          expectedCheckOutTime: { $gte: start, $lte: end },
+        });
       } else if (targetDateType === "actualCheckout") {
         andConditions.push({ actualCheckOutTime: { $gte: start, $lte: end } });
       } else if (targetDateType === "anyCheckout") {
         andConditions.push({
           $or: [
             { actualCheckOutTime: { $gte: start, $lte: end } },
-            { expectedCheckOutTime: { $gte: start, $lte: end } }
-          ]
+            { expectedCheckOutTime: { $gte: start, $lte: end } },
+          ],
         });
       }
     }
@@ -985,15 +1200,19 @@ export const getCheckInList = async (req: Request, res: Response) => {
         { "corporateCheckInDetails.contactMobile": searchRegex },
         { "corporateCheckInDetails.contactPersonName": searchRegex },
         { "roomDetails.roomNumber": searchRegex },
-        { "vehicleDetails.vehicleNumber": searchRegex }
+        { "vehicleDetails.vehicleNumber": searchRegex },
       ];
 
       // Support search matching booking code string
-      const matchedBookingsForSearch = await Booking.find({ bookingId: searchRegex })
+      const matchedBookingsForSearch = await Booking.find({
+        bookingId: searchRegex,
+      })
         .select("_id")
         .lean();
       if (matchedBookingsForSearch.length > 0) {
-        searchOrs.push({ bookingId: { $in: matchedBookingsForSearch.map(b => b._id) } });
+        searchOrs.push({
+          bookingId: { $in: matchedBookingsForSearch.map((b) => b._id) },
+        });
       }
 
       andConditions.push({ $or: searchOrs });
@@ -1009,15 +1228,16 @@ export const getCheckInList = async (req: Request, res: Response) => {
     const list = await CheckIn.find(query)
       .populate({
         path: "bookingId",
-        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId accessPackageId"
+        select:
+          "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId accessPackageId",
       })
       .populate({
         path: "roomDetails.roomId",
-        select: "roomNumber status roomType"
+        select: "roomNumber status roomType",
       })
       .populate({
         path: "roomDetails.roomType",
-        select: "name basePrice discountPercentage"
+        select: "name basePrice discountPercentage",
       })
       .sort(sortObj as any)
       .skip(skip)
@@ -1038,38 +1258,44 @@ export const getCheckInList = async (req: Request, res: Response) => {
           todayTotal: [
             {
               $match: {
-                checkInTime: { $gte: todayStart, $lte: todayEnd }
-              }
+                checkInTime: { $gte: todayStart, $lte: todayEnd },
+              },
             },
-            { $count: "count" }
+            { $count: "count" },
           ],
           activeStats: [
             {
               $match: {
-                status: "Active"
-              }
+                status: "Active",
+              },
             },
             {
               $group: {
                 _id: null,
                 activeCheckinsCount: { $sum: 1 },
-                activeGuestsCount: { $sum: { $size: { $ifNull: ["$guests", []] } } },
-                occupiedRoomsCount: { $sum: { $size: { $ifNull: ["$roomDetails", []] } } },
-                totalPendingDues: { $sum: { $ifNull: ["$paymentSummary.dueAmount", 0] } }
-              }
-            }
+                activeGuestsCount: {
+                  $sum: { $size: { $ifNull: ["$guests", []] } },
+                },
+                occupiedRoomsCount: {
+                  $sum: { $size: { $ifNull: ["$roomDetails", []] } },
+                },
+                totalPendingDues: {
+                  $sum: { $ifNull: ["$paymentSummary.dueAmount", 0] },
+                },
+              },
+            },
           ],
           expectedCheckoutsToday: [
             {
               $match: {
                 status: "Active",
-                expectedCheckOutTime: { $gte: todayStart, $lte: todayEnd }
-              }
+                expectedCheckOutTime: { $gte: todayStart, $lte: todayEnd },
+              },
             },
-            { $count: "count" }
-          ]
-        }
-      }
+            { $count: "count" },
+          ],
+        },
+      },
     ]);
 
     const todayCheckins = statsFacet[0]?.todayTotal?.[0]?.count || 0;
@@ -1077,9 +1303,10 @@ export const getCheckInList = async (req: Request, res: Response) => {
       activeCheckinsCount: 0,
       activeGuestsCount: 0,
       occupiedRoomsCount: 0,
-      totalPendingDues: 0
+      totalPendingDues: 0,
     };
-    const expectedCheckouts = statsFacet[0]?.expectedCheckoutsToday?.[0]?.count || 0;
+    const expectedCheckouts =
+      statsFacet[0]?.expectedCheckoutsToday?.[0]?.count || 0;
 
     res.status(200).json({
       success: true,
@@ -1095,10 +1322,9 @@ export const getCheckInList = async (req: Request, res: Response) => {
         expectedCheckouts,
         occupiedRooms: activeStats.occupiedRoomsCount,
         pendingDues: activeStats.totalPendingDues,
-        totalInHouseGuests: activeStats.activeGuestsCount
-      }
+        totalInHouseGuests: activeStats.activeGuestsCount,
+      },
     });
-
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1118,12 +1344,14 @@ export const extendStay = async (req: Request, res: Response) => {
       newAdvanceAmount,
       paymentMode,
       transactionId,
-      advanceNote
+      advanceNote,
     } = req.query;
 
     const checkIn = await CheckIn.findById(checkInId);
     if (!checkIn) {
-      return res.status(404).json({ success: false, message: "Check-in not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Check-in not found" });
     }
 
     const oldCheckoutDate = checkIn.expectedCheckOutTime;
@@ -1134,14 +1362,21 @@ export const extendStay = async (req: Request, res: Response) => {
 
     if (newRoomId) {
       const roomObjectId = new mongoose.Types.ObjectId(newRoomId as string);
-      const isAlreadyAdded = checkIn.roomDetails.some(r => r.roomId.toString() === newRoomId);
+      const isAlreadyAdded = checkIn.roomDetails.some(
+        (r) => r.roomId.toString() === newRoomId,
+      );
 
       if (!isAlreadyAdded) {
-        const roomInfo = await Room.findById(newRoomId).populate("roomType", "basePrice discountPercentage");
+        const roomInfo = await Room.findById(newRoomId).populate(
+          "roomType",
+          "basePrice discountPercentage",
+        );
         const rt = roomInfo?.roomType as any;
         const basePrice = rt?.basePrice || 0;
         const discountPercentage = rt?.discountPercentage || 0;
-        const discountedPrice = Math.round(basePrice * (1 - discountPercentage / 100));
+        const discountedPrice = Math.round(
+          basePrice * (1 - discountPercentage / 100),
+        );
 
         checkIn.roomDetails.push({
           roomId: roomObjectId,
@@ -1160,14 +1395,17 @@ export const extendStay = async (req: Request, res: Response) => {
         paymentMode: (paymentMode as any) || "Cash",
         transactionId: (transactionId as string) || "",
         paidAt: new Date(),
-        note: (advanceNote as string) || `Stay extended to ${newExpectedCheckout}`
+        note:
+          (advanceNote as string) || `Stay extended to ${newExpectedCheckout}`,
       };
 
       checkIn.payments.push(paymentEntry);
-      checkIn.totalAdvanceAmount = (checkIn.totalAdvanceAmount || 0) + Number(newAdvanceAmount);
+      checkIn.totalAdvanceAmount =
+        (checkIn.totalAdvanceAmount || 0) + Number(newAdvanceAmount);
     }
 
-    checkIn.notes = (checkIn.notes || "") +
+    checkIn.notes =
+      (checkIn.notes || "") +
       `\n[Update]: Extended from ${oldCheckoutDate.toLocaleString()} to ${newExpectedCheckout}. Additional Advance: ₹${newAdvanceAmount || 0}`;
 
     await checkIn.save();
@@ -1182,7 +1420,10 @@ export const extendStay = async (req: Request, res: Response) => {
         paidAt: new Date(),
         note: (advanceNote as string) || "Stay extension advance",
       });
-      billing.paidAmount = billing.payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+      billing.paidAmount = billing.payments.reduce(
+        (sum: number, p: any) => sum + Number(p.amount),
+        0,
+      );
       billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
       billing.paymentStatus = billing.dueAmount <= 0 ? "Paid" : "Partial";
       await billing.save();
@@ -1190,14 +1431,16 @@ export const extendStay = async (req: Request, res: Response) => {
 
     // Notification: stay extended
     try {
-      const roomNumbers = checkIn.roomDetails.map((r: any) => r.roomNumber).join(", ");
+      const roomNumbers = checkIn.roomDetails
+        .map((r: any) => r.roomNumber)
+        .join(", ");
       await sendNotificationToRole(
         "Reception",
         "booking",
         "Stay Extended",
         `Stay extended in Room(s) ${roomNumbers}. New checkout: ${new Date(newExpectedCheckout as string).toLocaleDateString()}. Additional advance: ₹${newAdvanceAmount || 0}.`,
         checkIn._id,
-        "CheckIn"
+        "CheckIn",
       );
     } catch (notifErr) {
       console.error("Failed to send extend stay notification:", notifErr);
@@ -1206,9 +1449,8 @@ export const extendStay = async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       message: "Stay extended and payment history updated successfully",
-      data: checkIn
+      data: checkIn,
     });
-
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1224,20 +1466,23 @@ export const getCheckInById = async (req: Request, res: Response) => {
     const checkIn = await CheckIn.findById(id)
       .populate({
         path: "bookingId",
-        select: "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId rooms accessPackageId"
+        select:
+          "bookingId bookingCategory bookingType status paymentStatus pricingSummary bookingContact mealPlan source externalBookingId rooms accessPackageId",
       })
       .populate({
         path: "roomDetails.roomId",
-        select: "roomNumber status roomType floor wing"
+        select: "roomNumber status roomType floor wing",
       })
       .populate({
         path: "roomDetails.roomType",
-        select: "name basePrice discountPercentage"
+        select: "name basePrice discountPercentage",
       })
       .lean();
 
     if (!checkIn) {
-      return res.status(404).json({ success: false, message: "Check-in not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Check-in not found" });
     }
 
     const billing = await Billing.findOne({ checkInId: id }).lean();
@@ -1246,10 +1491,9 @@ export const getCheckInById = async (req: Request, res: Response) => {
       success: true,
       data: {
         ...checkIn,
-        billing: billing || null
-      }
+        billing: billing || null,
+      },
     });
-
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1258,16 +1502,20 @@ export const getCheckInById = async (req: Request, res: Response) => {
 // ============================================================
 // UPDATE CHECK-IN
 // ============================================================
-export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, res: Response) => {
+export const updateCheckIn = async (
+  req: Request & { files?: UploadedFiles },
+  res: Response,
+) => {
   const mongoSession = await mongoose.startSession();
   mongoSession.startTransaction();
 
   try {
     const { id } = req.params;
 
-    const payload = typeof req.body.payload === "string"
-      ? JSON.parse(req.body.payload)
-      : req.body;
+    const payload =
+      typeof req.body.payload === "string"
+        ? JSON.parse(req.body.payload)
+        : req.body;
 
     const {
       guests,
@@ -1307,22 +1555,25 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       }
     }
 
-    const guestDocMap: Record<string, { public_id: string; secure_url: string }> = {};
+    const guestDocMap: Record<
+      string,
+      { public_id: string; secure_url: string }
+    > = {};
 
     let guestDocIndices: number[] = [];
     const rawIndices = req.body.guestDocIndices;
     if (rawIndices) {
-      guestDocIndices = typeof rawIndices === "string"
-        ? JSON.parse(rawIndices)
-        : rawIndices;
+      guestDocIndices =
+        typeof rawIndices === "string" ? JSON.parse(rawIndices) : rawIndices;
     }
 
     let guestAdditionalDocIndices: { guestIdx: number; docIdx: number }[] = [];
     const rawAdditionalIndices = req.body.guestAdditionalDocIndices;
     if (rawAdditionalIndices) {
-      guestAdditionalDocIndices = typeof rawAdditionalIndices === "string"
-        ? JSON.parse(rawAdditionalIndices)
-        : rawAdditionalIndices;
+      guestAdditionalDocIndices =
+        typeof rawAdditionalIndices === "string"
+          ? JSON.parse(rawAdditionalIndices)
+          : rawAdditionalIndices;
     }
 
     const parsedGuests = guests || (primaryGuest ? [primaryGuest] : []);
@@ -1333,7 +1584,11 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       const guestId = parsedGuests[guestIndex]?.id || `guest_${guestIndex}`;
 
       try {
-        const result = await uploadFile(file.tempFilePath, "guest-documents", file.mimetype);
+        const result = await uploadFile(
+          file.tempFilePath,
+          "guest-documents",
+          file.mimetype,
+        );
         guestDocMap[guestId] = {
           public_id: result.public_id,
           secure_url: result.secure_url,
@@ -1346,11 +1601,22 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
 
     for (let i = 0; i < guestAdditionalDocFiles.length; i++) {
       const file = guestAdditionalDocFiles[i];
-      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? { guestIdx: -1, docIdx: -1 };
-      
-      if (guestIdx >= 0 && docIdx >= 0 && parsedGuests[guestIdx]?.additionalIds?.[docIdx]) {
+      const { guestIdx, docIdx } = guestAdditionalDocIndices[i] ?? {
+        guestIdx: -1,
+        docIdx: -1,
+      };
+
+      if (
+        guestIdx >= 0 &&
+        docIdx >= 0 &&
+        parsedGuests[guestIdx]?.additionalIds?.[docIdx]
+      ) {
         try {
-          const result = await uploadFile(file.tempFilePath, "guest-additional-documents", file.mimetype);
+          const result = await uploadFile(
+            file.tempFilePath,
+            "guest-additional-documents",
+            file.mimetype,
+          );
           parsedGuests[guestIdx].additionalIds[docIdx].idDocument = {
             public_id: result.public_id,
             secure_url: result.secure_url,
@@ -1366,17 +1632,26 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
         const guestId = g.id || `guest_${idx}`;
         const uploadedDoc = guestDocMap[guestId];
         const existingGuest = existingCheckIn.guests.find(
-          (eg: any) => eg._id?.toString() === g.id || eg.name === g.name
+          (eg: any) => eg._id?.toString() === g.id || eg.name === g.name,
         );
 
         // Determine final document:
         // 1. New upload takes priority
         // 2. Document passed from frontend (existing URL) takes next priority
         // 3. Existing document in DB as fallback
-        let finalIdDocument = existingGuest?.idDocument || { public_id: "", secure_url: "" };
+        let finalIdDocument = existingGuest?.idDocument || {
+          public_id: "",
+          secure_url: "",
+        };
         if (uploadedDoc?.secure_url) {
-          finalIdDocument = { public_id: uploadedDoc.public_id, secure_url: uploadedDoc.secure_url };
-        } else if (g.idDocument?.secure_url && g.idDocument.secure_url.startsWith("http")) {
+          finalIdDocument = {
+            public_id: uploadedDoc.public_id,
+            secure_url: uploadedDoc.secure_url,
+          };
+        } else if (
+          g.idDocument?.secure_url &&
+          g.idDocument.secure_url.startsWith("http")
+        ) {
           // Frontend is passing back the existing document URL
           finalIdDocument = g.idDocument;
         }
@@ -1395,16 +1670,22 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
             ? new mongoose.Types.ObjectId(g.assignedRoomId)
             : existingGuest?.assignedRoomId,
           idDocument: finalIdDocument,
-          idDocuments: g.additionalIds?.map((add: any) => ({
-             idType: add.idType || "",
-             idNumber: add.idNumber || "",
-             idDocument: add.idDocument || { public_id: "", secure_url: "" }
-         })) || existingGuest?.idDocuments || [],
+          idDocuments:
+            g.additionalIds?.map((add: any) => ({
+              idType: add.idType || "",
+              idNumber: add.idNumber || "",
+              idDocument: add.idDocument || { public_id: "", secure_url: "" },
+            })) ||
+            existingGuest?.idDocuments ||
+            [],
           relationship: g.relationship || existingGuest?.relationship || "",
-          dateOfBirth: g.dateOfBirth ? new Date(g.dateOfBirth) : existingGuest?.dateOfBirth,
+          dateOfBirth: g.dateOfBirth
+            ? new Date(g.dateOfBirth)
+            : existingGuest?.dateOfBirth,
           livePhoto: existingGuest?.livePhoto,
           ocrVerification: existingGuest?.ocrVerification,
-          idVerificationStatus: existingGuest?.idVerificationStatus || "Pending",
+          idVerificationStatus:
+            existingGuest?.idVerificationStatus || "Pending",
         };
       });
       existingCheckIn.guests = updatedGuests;
@@ -1426,21 +1707,25 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
 
     // Always update vehicle details when provided in edit mode
     if (vehicleDetails !== undefined) {
-      const parsedVehicles = typeof vehicleDetails === "string"
-        ? JSON.parse(vehicleDetails)
-        : vehicleDetails;
+      const parsedVehicles =
+        typeof vehicleDetails === "string"
+          ? JSON.parse(vehicleDetails)
+          : vehicleDetails;
       // Only save vehicles that have at least a vehicle number
-      const validVehicles = parsedVehicles.filter((v: any) => v.vehicleNumber && v.vehicleNumber.trim() !== "");
+      const validVehicles = parsedVehicles.filter(
+        (v: any) => v.vehicleNumber && v.vehicleNumber.trim() !== "",
+      );
       existingCheckIn.vehicleDetails = validVehicles;
     }
 
     if (roomDetails) {
-      const parsedRooms = typeof roomDetails === "string"
-        ? JSON.parse(roomDetails)
-        : roomDetails;
+      const parsedRooms =
+        typeof roomDetails === "string" ? JSON.parse(roomDetails) : roomDetails;
       existingCheckIn.roomDetails = parsedRooms.map((r: any) => ({
         roomId: new mongoose.Types.ObjectId(r.roomId),
-        roomType: r.roomType ? new mongoose.Types.ObjectId(r.roomType) : undefined,
+        roomType: r.roomType
+          ? new mongoose.Types.ObjectId(r.roomType)
+          : undefined,
         roomNumber: r.roomNumber || "",
         originalPrice: Math.round(r.originalPrice || 0),
         appliedPrice: Math.round(r.appliedPrice || r.originalPrice || 0),
@@ -1449,9 +1734,10 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
     }
 
     if (corporateData && existingCheckIn.checkInType === "Corporate") {
-      const parsedCorp = typeof corporateData === "string"
-        ? JSON.parse(corporateData)
-        : corporateData;
+      const parsedCorp =
+        typeof corporateData === "string"
+          ? JSON.parse(corporateData)
+          : corporateData;
       existingCheckIn.corporateCheckInDetails = {
         ...existingCheckIn.corporateCheckInDetails,
         ...parsedCorp,
@@ -1459,8 +1745,12 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
     }
 
     existingCheckIn.verificationChecklist = {
-      primaryGuestVerified: existingCheckIn.guests.some((g: any) => g.isPrimary && g.name),
-      idUploaded: existingCheckIn.guests.some((g: any) => g.idDocument?.secure_url),
+      primaryGuestVerified: existingCheckIn.guests.some(
+        (g: any) => g.isPrimary && g.name,
+      ),
+      idUploaded: existingCheckIn.guests.some(
+        (g: any) => g.idDocument?.secure_url,
+      ),
       grcGenerated: existingCheckIn.grcDetails?.length > 0,
       paymentCollected: existingCheckIn.payments?.length > 0,
       roomAssigned: existingCheckIn.roomDetails?.length > 0,
@@ -1476,36 +1766,52 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
     await existingCheckIn.save({ session: mongoSession });
 
     if (roomDetails) {
-      const billing = await Billing.findOne({ checkInId: existingCheckIn._id }).session(mongoSession);
+      const billing = await Billing.findOne({
+        checkInId: existingCheckIn._id,
+      }).session(mongoSession);
       if (billing) {
         const checkInTimeVal = existingCheckIn.checkInTime;
         const checkOutTimeVal = existingCheckIn.expectedCheckOutTime;
-        const nights = Math.max(1, differenceInDays(
-          startOfDay(checkOutTimeVal),
-          startOfDay(checkInTimeVal)
-        ));
+        const nights = Math.max(
+          1,
+          differenceInDays(
+            startOfDay(checkOutTimeVal),
+            startOfDay(checkInTimeVal),
+          ),
+        );
 
-        const roomChargesBreakdown = existingCheckIn.roomDetails.map((room: any) => ({
-          roomId: room.roomId,
-          roomNumber: room.roomNumber,
-          checkInDate: checkInTimeVal,
-          checkOutDate: checkOutTimeVal,
-          nights,
-          ratePerNight: room.appliedPrice || 0,
-          totalRoomCharge: nights * (room.appliedPrice || 0),
-          stayType: "Original" as const,
-        }));
+        const roomChargesBreakdown = existingCheckIn.roomDetails.map(
+          (room: any) => ({
+            roomId: room.roomId,
+            roomNumber: room.roomNumber,
+            checkInDate: checkInTimeVal,
+            checkOutDate: checkOutTimeVal,
+            nights,
+            ratePerNight: room.appliedPrice || 0,
+            totalRoomCharge: nights * (room.appliedPrice || 0),
+            stayType: "Original" as const,
+          }),
+        );
 
         billing.roomChargesBreakdown = roomChargesBreakdown;
         billing.totalRoomCharges = roomChargesBreakdown.reduce(
           (sum: number, r: any) => sum + r.totalRoomCharge,
-          0
+          0,
         );
-        billing.subTotal = billing.totalRoomCharges + billing.totalFacilityCharges;
-        billing.grandTotal = billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
-        billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
-        billing.paymentStatus = billing.dueAmount <= 0 && billing.grandTotal > 0 ? "Paid"
-          : billing.paidAmount > 0 ? "Partial" : "Unpaid";
+        billing.subTotal =
+          billing.totalRoomCharges + billing.totalFacilityCharges;
+        billing.grandTotal =
+          billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
+        billing.dueAmount = Math.max(
+          0,
+          billing.grandTotal - billing.paidAmount,
+        );
+        billing.paymentStatus =
+          billing.dueAmount <= 0 && billing.grandTotal > 0
+            ? "Paid"
+            : billing.paidAmount > 0
+              ? "Partial"
+              : "Unpaid";
 
         billing.activityLogs.push({
           action: "Billing Updated on Check-in Edit",
@@ -1526,7 +1832,6 @@ export const updateCheckIn = async (req: Request & { files?: UploadedFiles }, re
       message: "Check-in updated successfully",
       data: existingCheckIn,
     });
-
   } catch (error: any) {
     await mongoSession.abortTransaction();
     mongoSession.endSession();
@@ -1592,9 +1897,12 @@ export const getStayOverview = async (req: Request, res: Response) => {
     // Push booking blocks
     for (const ci of checkins) {
       for (const rd of ci.roomDetails || []) {
-        const roomId = (rd.roomId as any)?._id?.toString() || rd.roomId?.toString();
+        const roomId =
+          (rd.roomId as any)?._id?.toString() || rd.roomId?.toString();
         const typeName = (rd.roomType as any)?.name || "Other";
-        const targetRoom = grouped[typeName]?.find((r: any) => r.id.toString() === roomId);
+        const targetRoom = grouped[typeName]?.find(
+          (r: any) => r.id.toString() === roomId,
+        );
 
         if (targetRoom) {
           targetRoom.bookings.push({
@@ -1607,7 +1915,10 @@ export const getStayOverview = async (req: Request, res: Response) => {
             status: ci.status,
             price: rd.appliedPrice || 0,
             roomNumber: rd.roomNumber || (rd.roomId as any)?.roomNumber || "",
-            roomType: (rd.roomType as any)?._id?.toString() || rd.roomType?.toString() || "",
+            roomType:
+              (rd.roomType as any)?._id?.toString() ||
+              rd.roomType?.toString() ||
+              "",
             totalAdvanceAmount: ci.totalAdvanceAmount || 0,
           });
         }
@@ -1623,7 +1934,6 @@ export const getStayOverview = async (req: Request, res: Response) => {
       success: true,
       data,
     });
-
   } catch (error: any) {
     console.error("getStayOverview error:", error);
     return res.status(500).json({
@@ -1648,14 +1958,18 @@ export const roomChange = async (req: Request, res: Response) => {
     if (!checkIn) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
-      return res.status(404).json({ success: false, message: "Check-in not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Check-in not found" });
     }
 
     const currentRoomDetail = checkIn.roomDetails?.[0];
     if (!currentRoomDetail) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
-      return res.status(400).json({ success: false, message: "No room details found" });
+      return res
+        .status(400)
+        .json({ success: false, message: "No room details found" });
     }
 
     const bookingStart = new Date(checkIn.checkInTime);
@@ -1702,11 +2016,15 @@ export const roomChange = async (req: Request, res: Response) => {
       });
     }
 
-    const newRoom = await Room.findById(newRoomId).populate("roomType", "basePrice discountPercentage").session(mongoSession);
+    const newRoom = await Room.findById(newRoomId)
+      .populate("roomType", "basePrice discountPercentage")
+      .session(mongoSession);
     if (!newRoom) {
       await mongoSession.abortTransaction();
       mongoSession.endSession();
-      return res.status(404).json({ success: false, message: "Room not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Room not found" });
     }
 
     const roomTypeId = newRoomType
@@ -1715,7 +2033,7 @@ export const roomChange = async (req: Request, res: Response) => {
 
     const nights = Math.max(
       1,
-      differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart))
+      differenceInDays(startOfDay(bookingEnd), startOfDay(bookingStart)),
     );
 
     const rt: any = newRoom.roomType;
@@ -1743,14 +2061,16 @@ export const roomChange = async (req: Request, res: Response) => {
 
     await checkIn.save({ session: mongoSession });
 
-    const billing = await Billing.findOne({ checkInId: checkIn._id }).session(mongoSession);
+    const billing = await Billing.findOne({ checkInId: checkIn._id }).session(
+      mongoSession,
+    );
     if (billing) {
       const oldRoomNights = Math.max(
         1,
         differenceInDays(
           startOfDay(effectiveDate ? new Date(effectiveDate) : bookingStart),
-          startOfDay(bookingStart)
-        )
+          startOfDay(bookingStart),
+        ),
       );
 
       // Closing entry for old room (prepend — audit trail preserved)
@@ -1780,10 +2100,12 @@ export const roomChange = async (req: Request, res: Response) => {
       billing.roomChargesBreakdown = [closingEntry, newRoomEntry];
       billing.totalRoomCharges = billing.roomChargesBreakdown.reduce(
         (sum: number, r: any) => sum + r.totalRoomCharge,
-        0
+        0,
       );
-      billing.subTotal = billing.totalRoomCharges + (billing.totalFacilityCharges || 0);
-      billing.grandTotal = billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
+      billing.subTotal =
+        billing.totalRoomCharges + (billing.totalFacilityCharges || 0);
+      billing.grandTotal =
+        billing.subTotal + billing.taxBreakdown.totalTax - billing.discount;
       billing.dueAmount = Math.max(0, billing.grandTotal - billing.paidAmount);
 
       billing.activityLogs.push({
@@ -1804,7 +2126,6 @@ export const roomChange = async (req: Request, res: Response) => {
       message: "Room changed successfully",
       data: checkIn,
     });
-
   } catch (error: any) {
     await mongoSession.abortTransaction();
     mongoSession.endSession();
